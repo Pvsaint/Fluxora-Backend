@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { loadConfig, resetConfig, ConfigError, STELLAR_NETWORKS } from './env';
 
 describe('Environment Configuration', () => {
@@ -140,7 +140,8 @@ describe('Environment Configuration', () => {
 
         it('should validate database pool size range', () => {
             process.env.NODE_ENV = 'development';
-            process.env.DATABASE_POOL_SIZE = '200';
+            // Loader uses DB_POOL_MAX (range 1–100); 200 must be rejected.
+            process.env.DB_POOL_MAX = '200';
 
             expect(() => loadConfig()).toThrow(ConfigError);
         });

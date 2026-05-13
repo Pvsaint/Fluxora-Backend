@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import type { Request, Response, NextFunction } from 'express';
 import { correlationStore } from '../tracing/middleware.js';
 
 /** Canonical header name used for correlation IDs throughout the service. */
@@ -38,7 +39,7 @@ function resolveCorrelationId(incoming: unknown): string {
   return randomUUID();
 }
 
-export function correlationIdMiddleware(req: any, res: any, next: any): void {
+export function correlationIdMiddleware(req: Request, res: Response, next: NextFunction): void {
   const correlationId = resolveCorrelationId(req.headers[CORRELATION_ID_HEADER]);
 
   correlationStore.run(correlationId, () => {

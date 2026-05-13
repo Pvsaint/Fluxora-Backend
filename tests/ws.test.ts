@@ -705,16 +705,40 @@ describe('WebSocket hub — observability and metrics', () => {
   });
 
   it('emits structured connect and disconnect logs with metrics', async () => {
-    const consoleSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    // The hub uses a structured logger that writes JSON lines directly to
+    // process.stdout (see src/lib/logger.ts), so we intercept stdout writes
+    // and filter for the ws_connect / ws_disconnect events.
+    const writes: string[] = [];
+    const stdoutSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation(((chunk: unknown): boolean => {
+        const text = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+        writes.push(text);
+        return true;
+      }) as typeof process.stdout.write);
 
     const ws = await connect(port);
+    await sleep(30); // let the connect log flush
 
-    // Verify connect log
-    expect(consoleSpy).toHaveBeenCalledTimes(1);
-    const connectLog = JSON.parse(consoleSpy.mock.calls[0][0] as string);
-    expect(connectLog.event).toBe('ws_connect');
-    expect(connectLog.connectionId).toBeDefined();
-    expect(connectLog.ip).toBeDefined();
+    const findEvent = (event: string): Record<string, unknown> | undefined => {
+      for (const w of writes) {
+        for (const line of w.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line) as Record<string, unknown>;
+            if (parsed.event === event) return parsed;
+          } catch {
+            // not a JSON log line
+          }
+        }
+      }
+      return undefined;
+    };
+
+    const connectLog = findEvent('ws_connect');
+    expect(connectLog).toBeDefined();
+    expect(connectLog?.connectionId).toBeDefined();
+    expect(connectLog?.ip).toBeDefined();
 
     // Exchange some messages to accumulate metrics
     send(ws, { type: 'subscribe', streamId: 'metric-stream' });
@@ -730,22 +754,19 @@ describe('WebSocket hub — observability and metrics', () => {
     ws.close(1000, 'Test closure');
     await sleep(50);
 
-    // Verify disconnect log
-    expect(consoleSpy).toHaveBeenCalledTimes(2);
-    const disconnectLog = JSON.parse(consoleSpy.mock.calls[1][0] as string);
+    const disconnectLog = findEvent('ws_disconnect');
+    expect(disconnectLog).toBeDefined();
+    expect(disconnectLog?.connectionId).toBe(connectLog?.connectionId);
+    expect(disconnectLog?.durationMs as number).toBeGreaterThanOrEqual(0);
+    expect(disconnectLog?.code).toBe(1000);
 
-    expect(disconnectLog.event).toBe('ws_disconnect');
-    expect(disconnectLog.connectionId).toBe(connectLog.connectionId);
-    expect(disconnectLog.durationMs).toBeGreaterThanOrEqual(0);
-    expect(disconnectLog.code).toBe(1000);
+    const metrics = disconnectLog?.metrics as Record<string, number>;
+    expect(metrics.messagesReceived).toBe(1);
+    expect(metrics.bytesReceived).toBeGreaterThan(0);
+    expect(metrics.messagesSent).toBe(1);
+    expect(metrics.bytesSent).toBeGreaterThan(0);
 
-    // Check metrics accuracy
-    expect(disconnectLog.metrics.messagesReceived).toBe(1);
-    expect(disconnectLog.metrics.bytesReceived).toBeGreaterThan(0);
-    expect(disconnectLog.metrics.messagesSent).toBe(1);
-    expect(disconnectLog.metrics.bytesSent).toBeGreaterThan(0);
-
-    consoleSpy.mockRestore();
+    stdoutSpy.mockRestore();
   });
 });
 

@@ -12,9 +12,59 @@
  * - Validation failures do not produce audit entries
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
+
+// Mock the DB-backed repository so this test does not need a live Postgres.
+const mockGetById = vi.fn();
+const mockUpsertStream = vi.fn();
+const mockUpdateStream = vi.fn();
+const mockFindWithCursor = vi.fn();
+const storedById = new Map<string, Record<string, unknown>>();
+
+function dbRecord(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id:                'stream-test-0',
+    sender_address:    'GCSX22222222222222222222222222222222222222222222222222UV',
+    recipient_address: 'GDRX22222222222222222222222222222222222222222222222222UV',
+    amount:            '1000.0000000',
+    streamed_amount:   '0',
+    remaining_amount:  '1000.0000000',
+    rate_per_second:   '0.0000116',
+    start_time:        1700000000,
+    end_time:          0,
+    status:            'active',
+    contract_id:       'api-created',
+    transaction_hash:  'a'.repeat(64),
+    event_index:       0,
+    created_at:        '2024-01-01T00:00:00.000Z',
+    updated_at:        '2024-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+vi.mock('../src/db/repositories/streamRepository.js', () => ({
+  streamRepository: {
+    getById:        (...a: unknown[]) => mockGetById(...a),
+    upsertStream:   (...a: unknown[]) => mockUpsertStream(...a),
+    updateStream:   (...a: unknown[]) => mockUpdateStream(...a),
+    findWithCursor: (...a: unknown[]) => mockFindWithCursor(...a),
+    countByStatus:  vi.fn().mockResolvedValue({ active: 0, paused: 0, completed: 0, cancelled: 0 }),
+  },
+}));
+
+vi.mock('../src/db/pool.js', () => ({
+  getPool:             vi.fn(() => ({})),
+  query:               vi.fn(),
+  PoolExhaustedError:  class PoolExhaustedError extends Error {
+    constructor() { super('pool exhausted'); this.name = 'PoolExhaustedError'; }
+  },
+  DuplicateEntryError: class DuplicateEntryError extends Error {
+    constructor(d?: string) { super(d ?? 'duplicate'); this.name = 'DuplicateEntryError'; }
+  },
+}));
+
 import { recordAuditEvent, getAuditEntries, _resetAuditLog } from '../src/lib/auditLog.js';
 import { auditRouter } from '../src/routes/audit.js';
 import { adminRouter } from '../src/routes/admin.js';
@@ -22,21 +72,39 @@ import { streamsRouter, streams, resetStreamIdempotencyStore } from '../src/rout
 import { _resetForTest as resetAdminState } from '../src/state/adminState.js';
 import { correlationIdMiddleware } from '../src/middleware/correlationId.js';
 import { errorHandler } from '../src/middleware/errorHandler.js';
+import { authenticate } from '../src/middleware/auth.js';
+import { generateToken } from '../src/lib/auth.js';
+import { initializeConfig } from '../src/config/env.js';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupertestApp = any;
 
 const ADMIN_KEY = 'test-admin-key-for-audit-tests';
+let testToken: string;
+
+beforeAll(() => {
+  process.env.NODE_ENV = 'test';
+  process.env.JWT_SECRET = 'a-very-long-secret-key-for-testing-only-12345';
+  initializeConfig();
+  testToken = generateToken({ address: 'GTEST', role: 'operator' });
+});
 
 function createTestApp(): SupertestApp {
   const app = express();
   app.use(express.json());
   app.use(correlationIdMiddleware);
-  app.use('/api/streams', streamsRouter);
+  // Streams routes opt-in to `authenticate` per-handler; do NOT apply it
+  // globally because the admin router validates its bearer token via a
+  // separate `requireAdminAuth` middleware and would 401 on a malformed JWT.
+  app.use('/api/streams', authenticate, streamsRouter);
   app.use('/api/audit', auditRouter);
   app.use('/api/admin', adminRouter);
   app.use(errorHandler);
   return app;
+}
+
+function withAuth(req: request.Test): request.Test {
+  return req.set('Authorization', `Bearer ${testToken}`);
 }
 
 let savedAdminKey: string | undefined;
@@ -48,6 +116,24 @@ beforeEach(() => {
   resetStreamIdempotencyStore();
   savedAdminKey = process.env.ADMIN_API_KEY;
   process.env.ADMIN_API_KEY = ADMIN_KEY;
+
+  storedById.clear();
+  vi.clearAllMocks();
+  mockGetById.mockImplementation(async (id: string) => storedById.get(id));
+  mockUpsertStream.mockImplementation(async (input: { id: string }) => {
+    const record = dbRecord({ ...input, status: 'active' });
+    storedById.set(input.id, record);
+    return { created: true, stream: record };
+  });
+  mockUpdateStream.mockImplementation(
+    async (id: string, patch: Record<string, unknown>) => {
+      const existing = storedById.get(id) ?? dbRecord({ id });
+      const updated = { ...existing, ...patch };
+      storedById.set(id, updated);
+      return updated;
+    },
+  );
+  mockFindWithCursor.mockResolvedValue({ streams: [], hasMore: false });
 });
 
 afterEach(() => {
@@ -151,17 +237,19 @@ describe('GET /api/audit', () => {
 
   it('returns 200 with empty entries when log is empty', async () => {
     const res = await request(app).get('/api/audit').expect(200);
-    expect(res.body.entries).toEqual([]);
-    expect(res.body.total).toBe(0);
+    // GET /api/audit wraps the payload in `successResponse(...)` so the
+    // entries live under `body.data`.
+    expect(res.body.data.entries).toEqual([]);
+    expect(res.body.data.total).toBe(0);
   });
 
   it('returns all recorded entries', async () => {
     recordAuditEvent('STREAM_CREATED', 'stream', 'abc');
     recordAuditEvent('STREAM_CANCELLED', 'stream', 'abc');
     const res = await request(app).get('/api/audit').expect(200);
-    expect(res.body.total).toBe(2);
-    expect(res.body.entries[0].action).toBe('STREAM_CREATED');
-    expect(res.body.entries[1].action).toBe('STREAM_CANCELLED');
+    expect(res.body.data.total).toBe(2);
+    expect(res.body.data.entries[0].action).toBe('STREAM_CREATED');
+    expect(res.body.data.entries[1].action).toBe('STREAM_CANCELLED');
   });
 
   it('includes admin audit entries alongside stream entries', async () => {
@@ -169,8 +257,8 @@ describe('GET /api/audit', () => {
     recordAuditEvent('PAUSE_FLAGS_UPDATED', 'pauseFlags', 'system');
     recordAuditEvent('REINDEX_TRIGGERED', 'reindex', 'system');
     const res = await request(app).get('/api/audit').expect(200);
-    expect(res.body.total).toBe(3);
-    expect(res.body.entries.map((e: any) => e.action)).toEqual([
+    expect(res.body.data.total).toBe(3);
+    expect(res.body.data.entries.map((e: { action: string }) => e.action)).toEqual([
       'STREAM_CREATED',
       'PAUSE_FLAGS_UPDATED',
       'REINDEX_TRIGGERED',
@@ -190,15 +278,14 @@ describe('Audit entries via streams API', () => {
   });
 
   const validStream = {
-    sender: 'GCSX2XXXXXXXXXXXXXXXXXXXXXXX',
-    recipient: 'GDRX2XXXXXXXXXXXXXXXXXXXXXXX',
+    sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+    recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
     depositAmount: '1000.0000000',
     ratePerSecond: '0.0000116',
   };
 
   it('records STREAM_CREATED when a stream is created', async () => {
-    await request(app)
-      .post('/api/streams')
+    await withAuth(request(app).post('/api/streams'))
       .set('Idempotency-Key', 'audit-test-create-1')
       .send(validStream)
       .expect(201);
@@ -206,18 +293,18 @@ describe('Audit entries via streams API', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]!.action).toBe('STREAM_CREATED');
     expect(entries[0]!.resourceType).toBe('stream');
-    expect(entries[0]!.meta?.depositAmount).toBe('1000.0000000');
+    // depositAmount is normalised by the validator (trailing zeros stripped).
+    expect(entries[0]!.meta?.depositAmount).toBe('1000');
   });
 
   it('records STREAM_CANCELLED when a stream is cancelled', async () => {
-    const createRes = await request(app)
-      .post('/api/streams')
+    const createRes = await withAuth(request(app).post('/api/streams'))
       .set('Idempotency-Key', 'audit-test-cancel-1')
       .send(validStream)
       .expect(201);
-    const { id } = createRes.body;
+    const { id } = createRes.body.data;
 
-    await request(app).delete(`/api/streams/${id}`).expect(200);
+    await withAuth(request(app).delete(`/api/streams/${id}`)).expect(200);
 
     const entries = getAuditEntries();
     const cancelEntry = entries.find((e) => e.action === 'STREAM_CANCELLED');
@@ -226,20 +313,19 @@ describe('Audit entries via streams API', () => {
   });
 
   it('propagates correlationId from request into audit entry', async () => {
-    await request(app)
-      .post('/api/streams')
+    await withAuth(request(app).post('/api/streams'))
       .set('Idempotency-Key', 'audit-test-corr-1')
-      .set('x-correlation-id', 'test-corr-999')
+      // correlationId middleware only accepts valid UUID v4 strings.
+      .set('x-correlation-id', '11111111-1111-4111-8111-111111111111')
       .send(validStream)
       .expect(201);
 
     const [entry] = getAuditEntries();
-    expect(entry.correlationId).toBe('test-corr-999');
+    expect(entry.correlationId).toBe('11111111-1111-4111-8111-111111111111');
   });
 
   it('does not record an audit entry when stream creation fails validation', async () => {
-    await request(app)
-      .post('/api/streams')
+    await withAuth(request(app).post('/api/streams'))
       .set('Idempotency-Key', 'audit-test-invalid-1')
       .send({ ...validStream, depositAmount: 9999 }) // number, not string
       .expect(400);
@@ -248,13 +334,12 @@ describe('Audit entries via streams API', () => {
   });
 
   it('does not record an audit entry when cancelling a non-existent stream', async () => {
-    await request(app).delete('/api/streams/does-not-exist').expect(404);
+    await withAuth(request(app).delete('/api/streams/does-not-exist')).expect(404);
     expect(getAuditEntries()).toHaveLength(0);
   });
 
   it('includes sender and recipient in STREAM_CREATED meta', async () => {
-    await request(app)
-      .post('/api/streams')
+    await withAuth(request(app).post('/api/streams'))
       .set('Idempotency-Key', 'audit-test-meta-1')
       .send(validStream)
       .expect(201);
@@ -327,12 +412,12 @@ describe('Audit entries via admin API', () => {
 
   it('propagates correlationId into admin audit entry', async () => {
     await adminRequest('put', '/pause')
-      .set('x-correlation-id', 'admin-corr-456')
+      .set('x-correlation-id', '22222222-2222-4222-8222-222222222222')
       .send({ ingestion: true })
       .expect(200);
 
     const [entry] = getAuditEntries();
-    expect(entry.correlationId).toBe('admin-corr-456');
+    expect(entry.correlationId).toBe('22222222-2222-4222-8222-222222222222');
   });
 
   // -- POST /api/admin/reindex -----------------------------------------------

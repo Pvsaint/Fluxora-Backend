@@ -33,8 +33,11 @@ import { toDecimalString } from '../src/indexer/types.js';
 const INDEXER_TOKEN = 'test-indexer-token';
 const INGEST_ENDPOINT = '/internal/indexer/contract-events';
 const REPLAY_ENDPOINT = '/internal/indexer/events';
+// Short aliases used by legacy describe blocks.
+const TOKEN = INDEXER_TOKEN;
+const ENDPOINT = INGEST_ENDPOINT;
 
-function buildEvent(eventId: string, ledger = 512345) {
+function buildEvent(eventId: string, ledger = 512345, ledgerHash = `hash-${ledger}`) {
   return {
     eventId,
     ledger,
@@ -61,6 +64,9 @@ function post(events: unknown[]) {
     .send({ events });
 }
 
+// Alias kept for older `postEvents` call-sites.
+const postEvents = post;
+
 function getEvents(query: Record<string, unknown> = {}) {
   return request(app)
     .get(REPLAY_ENDPOINT)
@@ -77,24 +83,24 @@ describe('Indexer worker contract event ingestion', () => {
 
   it('persists a valid single-event batch', async () => {
     const res = await post([buildEvent('evt-1')]).expect(200);
-    expect(res.body.outcome).toBe('persisted');
-    expect(res.body.insertedCount).toBe(1);
-    expect(res.body.duplicateCount).toBe(0);
-    expect(res.body.insertedEventIds).toEqual(['evt-1']);
+    expect(res.body.data.outcome).toBe('persisted');
+    expect(res.body.data.insertedCount).toBe(1);
+    expect(res.body.data.duplicateCount).toBe(0);
+    expect(res.body.data.insertedEventIds).toEqual(['evt-1']);
   });
 
   it('persists a multi-event batch and returns all inserted ids', async () => {
     const res = await post([buildEvent('evt-1'), buildEvent('evt-2'), buildEvent('evt-3')]).expect(200);
-    expect(res.body.insertedCount).toBe(3);
-    expect(res.body.insertedEventIds).toHaveLength(3);
+    expect(res.body.data.insertedCount).toBe(3);
+    expect(res.body.data.insertedEventIds).toHaveLength(3);
   });
 
   it('absorbs duplicate delivery without failing the retry', async () => {
     await post([buildEvent('evt-1')]).expect(200);
     const res = await post([buildEvent('evt-1')]).expect(200);
-    expect(res.body.insertedCount).toBe(0);
-    expect(res.body.duplicateCount).toBe(1);
-    expect(res.body.duplicateEventIds).toEqual(['evt-1']);
+    expect(res.body.data.insertedCount).toBe(0);
+    expect(res.body.data.duplicateCount).toBe(1);
+    expect(res.body.data.duplicateEventIds).toEqual(['evt-1']);
   });
 
   it('preserves decimal-string amounts in the payload without coercion', async () => {
@@ -120,13 +126,6 @@ describe('Indexer worker contract event ingestion', () => {
     expect(health.body.dependencies.indexer.acceptedEventCount).toBe(1);
   });
 
-    expect(response.body.success).toBe(true);
-    expect(response.body.data.outcome).toBe('persisted');
-    expect(response.body.data.insertedCount).toBe(2);
-    expect(response.body.data.duplicateCount).toBe(0);
-    expect(response.body.data.insertedEventIds).toEqual(['evt-1', 'evt-2']);
-  });
-
   it('reports lastSafeLedger as maxLedger - 1', async () => {
     await post([buildEvent('evt-1', 1000, 'hash-1000')]).expect(200);
     const health = await request(app).get('/health').expect(200);
@@ -141,17 +140,12 @@ describe('Indexer HTTP — auth & validation', () => {
     setIndexerEventStore(new InMemoryContractEventStore());
   });
 
-    expect(response.body.data.insertedCount).toBe(0);
-    expect(response.body.data.duplicateCount).toBe(1);
-    expect(response.body.data.duplicateEventIds).toEqual(['evt-1']);
-  });
-
   it('rejects unauthenticated callers', async () => {
     const response = await request(app)
       .post(INGEST_ENDPOINT)
       .send({ events: [buildEvent('evt-1')] })
       .expect(401);
-    expect(res.body.error.code).toBe('UNAUTHORIZED');
+    expect(response.body.error.code).toBe('UNAUTHORIZED');
   });
 
   it('rejects oversized payloads predictably', async () => {
@@ -161,7 +155,7 @@ describe('Indexer HTTP — auth & validation', () => {
       .set('x-indexer-worker-token', INDEXER_TOKEN)
       .send({ events: [{ ...buildEvent('evt-1'), payload: { oversizedPayload } }] })
       .expect(413);
-    expect(res.body.error.code).toBe('PAYLOAD_TOO_LARGE');
+    expect(response.body.error.code).toBe('PAYLOAD_TOO_LARGE');
   });
 
   it('rejects a batch with an empty eventId', async () => {
@@ -171,6 +165,8 @@ describe('Indexer HTTP — auth & validation', () => {
 
   it('rejects malformed batches atomically', async () => {
     const response = await postEvents([{ ...buildEvent('evt-1'), eventId: '' }]).expect(400);
+    expect(response.body.error.code).toBe('VALIDATION_ERROR');
+  });
 
   it('rejects a batch with a non-object payload', async () => {
     const res = await post([{ ...buildEvent('e1'), payload: 'not-an-object' }]).expect(400);
@@ -470,12 +466,6 @@ describe('toDecimalString()', () => {
     expect(toDecimalString('0')).toBe('0');
     expect(toDecimalString('-50.5')).toBe('-50.5');
     expect(toDecimalString('+1.5')).toBe('+1.5');
-  });
-
-    expect(response.body.data.dependencies.indexer.store).toBe('memory');
-    expect(response.body.data.dependencies.indexer.dependency).toBe('healthy');
-    expect(response.body.data.dependencies.indexer.lastSuccessfulIngestAt).toBeTruthy();
-    expect(response.body.data.dependencies.indexer.acceptedEventCount).toBe(1);
   });
 });
 

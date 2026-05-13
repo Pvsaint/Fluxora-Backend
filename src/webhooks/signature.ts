@@ -56,7 +56,7 @@ function toUnixSeconds(value: number | Date) {
 export function buildWebhookSigningPayload(
   timestamp: string,
   rawBody: string | Buffer,
-) {
+): Buffer {
   const body = toBuffer(rawBody);
   return Buffer.concat([Buffer.from(`${timestamp}.`, 'utf8'), body]);
 }
@@ -65,7 +65,7 @@ export function computeWebhookSignature(
   secret: string,
   timestamp: string,
   rawBody: string | Buffer,
-) {
+): string {
   return createHmac('sha256', secret)
     .update(buildWebhookSigningPayload(timestamp, rawBody))
     .digest('hex');

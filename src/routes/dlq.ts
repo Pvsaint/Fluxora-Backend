@@ -77,7 +77,7 @@
  *       403: { description: Forbidden }
  *       404: { description: Not found }
  */
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import { authenticate, requireAuth } from '../middleware/auth.js';
 import { asyncHandler, validationError } from '../middleware/errorHandler.js';
 import { info, warn } from '../utils/logger.js';
@@ -127,7 +127,7 @@ export function _resetDlq(): void {
 export const dlqRouter = Router();
 
 /** Enforce operator role; must be used after authenticate + requireAuth. */
-function requireOperator(req: any, res: any, next: any): void {
+function requireOperator(req: Request, res: Response, next: NextFunction): void {
   if (req.user?.role !== 'operator') {
     warn('Non-operator attempted DLQ access', { role: req.user?.role, path: req.path });
     res.status(403).json(
@@ -147,7 +147,7 @@ dlqRouter.use(authenticate, requireAuth, requireOperator);
  */
 dlqRouter.get(
   '/',
-  asyncHandler(async (req: any, res: any) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const limitParam  = req.query.limit;
     const offsetParam = req.query.offset;
     const topicFilter = req.query.topic;
@@ -205,7 +205,7 @@ dlqRouter.get(
  */
 dlqRouter.get(
   '/:id',
-  asyncHandler(async (req: any, res: any) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const entry = dlqEntries.find((e) => e.id === req.params.id);
     if (!entry) {
       res.status(404).json(errorResponse('NOT_FOUND', `DLQ entry '${req.params.id}' not found`, undefined, req.id));
@@ -221,7 +221,7 @@ dlqRouter.get(
  */
 dlqRouter.post(
   '/:id/replay',
-  asyncHandler(async (req: any, res: any) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const index = dlqEntries.findIndex((e) => e.id === req.params.id);
     if (index === -1) {
       res.status(404).json({ error: { code: 'NOT_FOUND', message: `DLQ entry '${req.params.id}' not found`, requestId: req.id } });
@@ -249,11 +249,11 @@ dlqRouter.post(
       { topic: entry.topic, originalAttempts: entry.attempts }
     );
 
-    res.json({ 
-      message: 'DLQ entry replayed', 
+    res.json(successResponse({
+      message: 'DLQ entry replayed',
       id: entry.id,
-      topic: entry.topic
-    });
+      topic: entry.topic,
+    }, req.id));
   }),
 );
 
@@ -263,7 +263,7 @@ dlqRouter.post(
  */
 dlqRouter.delete(
   '/:id',
-  asyncHandler(async (req: any, res: any) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const index = dlqEntries.findIndex((e) => e.id === req.params.id);
     if (index === -1) {
       res.status(404).json(errorResponse('NOT_FOUND', `DLQ entry '${req.params.id}' not found`, undefined, req.id));
@@ -281,7 +281,7 @@ dlqRouter.delete(
  */
 dlqRouter.delete(
   '/',
-  asyncHandler(async (req: any, res: any) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const topicFilter = req.query.topic;
     const requestId = req.id;
 
@@ -291,7 +291,7 @@ dlqRouter.delete(
     }
 
     if (entriesToRemove.length === 0) {
-      res.json({ message: 'No DLQ entries to purge', purged: 0 });
+      res.json(successResponse({ message: 'No DLQ entries to purge', purged: 0 }, requestId));
       return;
     }
 
@@ -316,11 +316,11 @@ dlqRouter.delete(
       { purgedCount: removedIds.length, topicFilter, removedIds }
     );
 
-    res.json({ 
-      message: 'DLQ entries purged', 
+    res.json(successResponse({
+      message: 'DLQ entries purged',
       purged: removedIds.length,
       topicFilter: topicFilter || 'all',
-      removedIds
-    });
+      removedIds,
+    }, requestId));
   }),
 );

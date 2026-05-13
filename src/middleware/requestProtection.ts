@@ -80,7 +80,7 @@ export function bodySizeLimitMiddleware(
  * Validate JSON nesting depth after express.json() has parsed the body.
  * Rejects with 400 if depth exceeds maxDepth.
  */
-export function jsonDepthMiddleware(maxDepth = 10) {
+export function jsonDepthMiddleware(maxDepth = 10): (req: Request, _res: Response, next: NextFunction) => void {
   return (req: Request, _res: Response, next: NextFunction): void => {
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.body !== undefined) {
       try {
@@ -161,7 +161,7 @@ export function requireIdempotencyKey(
  * Enforce a socket-level request timeout.
  * Responds 408 if the socket is idle for longer than timeoutMs.
  */
-export function requestTimeoutMiddleware(timeoutMs: number) {
+export function requestTimeoutMiddleware(timeoutMs: number): (req: Request, res: Response, next: NextFunction) => void {
   return (req: Request, res: Response, next: NextFunction): void => {
     req.socket.setTimeout(timeoutMs, () => {
       if (!res.headersSent) {

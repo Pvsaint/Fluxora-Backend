@@ -1,16 +1,78 @@
 import request from 'supertest';
+import { vi } from 'vitest';
+
+// Mock the DB-backed repository so we do not need a live Postgres.
+const mockGetById = vi.fn();
+const mockUpsertStream = vi.fn();
+const mockUpdateStream = vi.fn();
+const mockFindWithCursor = vi.fn();
+vi.mock('../src/db/repositories/streamRepository.js', () => ({
+  streamRepository: {
+    getById:        (...a: unknown[]) => mockGetById(...a),
+    upsertStream:   (...a: unknown[]) => mockUpsertStream(...a),
+    updateStream:   (...a: unknown[]) => mockUpdateStream(...a),
+    findWithCursor: (...a: unknown[]) => mockFindWithCursor(...a),
+    countByStatus:  vi.fn().mockResolvedValue({ active: 0, paused: 0, completed: 0, cancelled: 0 }),
+  },
+}));
+vi.mock('../src/db/pool.js', () => ({
+  getPool:             vi.fn(() => ({})),
+  query:               vi.fn(),
+  PoolExhaustedError:  class PoolExhaustedError extends Error {},
+  DuplicateEntryError: class DuplicateEntryError extends Error {},
+}));
+
 import { app } from '../src/app.js';
 import { generateToken } from '../src/lib/auth.js';
+import { initializeConfig } from '../src/config/env.js';
 
 describe('Auth Protected Routes', () => {
   let token: string;
-  const address = 'GCSX2...';
+  const address = 'GCSX22222222222222222222222222222222222222222222222222UV';
 
   let idempotencyCounter = 0;
   const nextKey = () => `auth-protected-key-${++idempotencyCounter}`;
 
+  const storedById = new Map<string, Record<string, unknown>>();
+
   beforeAll(() => {
+    initializeConfig();
     token = generateToken({ address, role: 'operator' });
+  });
+
+  beforeEach(() => {
+    storedById.clear();
+    mockGetById.mockImplementation(async (id: string) => storedById.get(id));
+    mockUpsertStream.mockImplementation(async (input: { id: string }) => {
+      const record = {
+        id: input.id,
+        sender_address: address,
+        recipient_address: address,
+        amount: '100',
+        streamed_amount: '0',
+        remaining_amount: '100',
+        rate_per_second: '1',
+        start_time: 0,
+        end_time: 0,
+        status: 'active',
+        contract_id: 'api-created',
+        transaction_hash: 'a'.repeat(64),
+        event_index: 0,
+        created_at: '2024-01-01T00:00:00.000Z',
+        updated_at: '2024-01-01T00:00:00.000Z',
+      };
+      storedById.set(input.id, record);
+      return { created: true, stream: record };
+    });
+    mockUpdateStream.mockImplementation(
+      async (id: string, patch: Record<string, unknown>) => {
+        const existing = storedById.get(id) ?? { id, status: 'active' };
+        const updated = { ...existing, ...patch };
+        storedById.set(id, updated);
+        return updated;
+      },
+    );
+    mockFindWithCursor.mockResolvedValue({ streams: [], hasMore: false });
   });
 
   describe('POST /api/auth/session', () => {
@@ -56,13 +118,13 @@ describe('Auth Protected Routes', () => {
         .set('Authorization', `Bearer ${token}`)
         .set('Idempotency-Key', nextKey())
         .send({
-          sender: 'G1',
-          recipient: 'G2',
+          sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+          recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
           depositAmount: '100',
           ratePerSecond: '1'
         });
       
-      const streamId = createRes.body.id;
+      const streamId = createRes.body.data.id;
 
       // Then get it without auth
       const res = await request(app).get(`/api/streams/${streamId}`);
@@ -73,8 +135,8 @@ describe('Auth Protected Routes', () => {
       const res = await request(app)
         .post('/api/streams')
         .send({
-          sender: 'G1',
-          recipient: 'G2',
+          sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+          recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
           depositAmount: '100',
           ratePerSecond: '1'
         });
@@ -89,8 +151,8 @@ describe('Auth Protected Routes', () => {
         .post('/api/streams')
         .set('Authorization', 'Bearer invalid-token')
         .send({
-          sender: 'G1',
-          recipient: 'G2',
+          sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+          recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
           depositAmount: '100',
           ratePerSecond: '1'
         });
@@ -105,8 +167,8 @@ describe('Auth Protected Routes', () => {
         .post('/api/streams')
         .set('Authorization', 'InvalidFormat')
         .send({
-          sender: 'G1',
-          recipient: 'G2',
+          sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+          recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
           depositAmount: '100',
           ratePerSecond: '1'
         });
@@ -121,14 +183,16 @@ describe('Auth Protected Routes', () => {
         .set('Authorization', `Bearer ${token}`)
         .set('Idempotency-Key', nextKey())
         .send({
-          sender: 'G1',
-          recipient: 'G2',
+          sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+          recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
           depositAmount: '100',
           ratePerSecond: '1'
         });
 
       expect(res.status).toBe(201);
-      expect(res.body.sender).toBe('G1');
+      expect(res.body.data.sender).toBe(
+        'GCSX22222222222222222222222222222222222222222222222222UV',
+      );
     });
 
     it('should allow stream cancellation with a valid token', async () => {
@@ -138,13 +202,13 @@ describe('Auth Protected Routes', () => {
         .set('Authorization', `Bearer ${token}`)
         .set('Idempotency-Key', nextKey())
         .send({
-          sender: 'G1',
-          recipient: 'G2',
+          sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+          recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
           depositAmount: '100',
           ratePerSecond: '1'
         });
       
-      const streamId = createRes.body.id;
+      const streamId = createRes.body.data.id;
 
       // Then cancel it
       const res = await request(app)
@@ -152,7 +216,7 @@ describe('Auth Protected Routes', () => {
         .set('Authorization', `Bearer ${token}`);
 
       expect(res.status).toBe(200);
-      expect(res.body.message).toBe('Stream cancelled');
+      expect(res.body.data.message).toBe('Stream cancelled');
     });
 
     it('should deny stream cancellation without a token', async () => {
@@ -231,8 +295,8 @@ describe('Auth Protected Routes', () => {
       const res = await request(app)
         .post('/api/streams')
         .send({
-          sender: 'G1',
-          recipient: 'G2',
+          sender: 'GCSX22222222222222222222222222222222222222222222222222UV',
+          recipient: 'GDRX22222222222222222222222222222222222222222222222222UV',
           depositAmount: '100',
           ratePerSecond: '1'
         });

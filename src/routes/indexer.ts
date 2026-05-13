@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import {
   payloadTooLarge,
   unauthorized,
@@ -19,13 +19,13 @@ export const indexerRouter = Router();
 const INDEXER_AUTH_HEADER = 'x-indexer-worker-token';
 let indexerWorkerToken = process.env.INDEXER_WORKER_TOKEN ?? 'fluxora-dev-indexer-token';
 
-function resolveActor(req: any): string {
+function resolveActor(req: Request): string {
   const forwardedFor = req.header('x-forwarded-for');
-  const remoteAddress = req.ip || req.socket?.remoteAddress || 'unknown';
+  const remoteAddress = req.ip ?? req.socket.remoteAddress ?? 'unknown';
   return String(forwardedFor ?? remoteAddress);
 }
 
-function requireIndexerToken(req: any): void {
+function requireIndexerToken(req: Request): void {
   const providedToken = req.header(INDEXER_AUTH_HEADER);
   if (typeof providedToken !== 'string' || providedToken.trim() === '') {
     throw unauthorized('Indexer worker authentication is required');
@@ -36,7 +36,7 @@ function requireIndexerToken(req: any): void {
   }
 }
 
-function enforceContentLength(req: any): void {
+function enforceContentLength(req: Request): void {
   const header = req.header('content-length');
   if (!header) {
     return;
@@ -107,14 +107,15 @@ function enforceContentLength(req: any): void {
  *       503:
  *         description: Durable store unavailable
  */
-indexerRouter.post('/contract-events', async (req: any, res: any, next: any) => {
+indexerRouter.post('/contract-events', async (req: Request, res: Response, next: NextFunction) => {
   try {
     requireIndexerToken(req);
     enforceContentLength(req);
 
+    const requestId = req.id ?? req.correlationId;
     const result = await indexerIngestionService.ingest(req.body, {
       actor: resolveActor(req),
-      requestId: req.id ?? req.correlationId,
+      ...(requestId !== undefined ? { requestId } : {}),
     });
 
     res.status(200).json(successResponse({
@@ -222,7 +223,7 @@ export function setIndexerEventStore(store: ContractEventStore): void {
  *       401:
  *         description: Missing or invalid internal worker credentials
  */
-indexerRouter.get('/events/replay', async (req: any, res: any, next: any) => {
+indexerRouter.get('/events/replay', async (req: Request, res: Response, next: NextFunction) => {
   try {
     requireIndexerToken(req);
 
@@ -300,7 +301,7 @@ indexerRouter.get('/events/replay', async (req: any, res: any, next: any) => {
  *       401:
  *         description: Missing or invalid internal worker credentials
  */
-indexerRouter.get('/events', async (req: any, res: any, next: any) => {
+indexerRouter.get('/events', async (req: Request, res: Response, next: NextFunction) => {
   try {
     requireIndexerToken(req);
 
@@ -344,7 +345,14 @@ export function resetIndexerState(): void {
   indexerWorkerToken = process.env.INDEXER_WORKER_TOKEN ?? 'fluxora-dev-indexer-token';
 }
 
-export function getIndexerHealth() {
+export interface IndexerHealthInfo {
+  authHeader: string;
+  maxBatchSize: number;
+  rateLimit: { requests: number; windowMs: number };
+  [key: string]: unknown;
+}
+
+export function getIndexerHealth(): IndexerHealthInfo {
   return {
     ...indexerIngestionService.getHealthSnapshot(),
     authHeader: INDEXER_AUTH_HEADER,

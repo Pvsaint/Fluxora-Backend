@@ -54,7 +54,7 @@ export class DefaultRedisClientFactory implements RedisClientFactory {
         const host = url.hostname ?? 'localhost';
         const password = url.password || undefined;
 
-        const client = new ioredis.default(host, port, {
+        const client = new ioredis.Redis(port, host, {
             password,
             lazyConnect: true,
             maxRetriesPerRequest: 3,

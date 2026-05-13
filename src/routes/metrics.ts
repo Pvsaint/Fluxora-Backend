@@ -20,7 +20,7 @@ metricsRouter.get('/', async (_req: Request, res: Response) => {
     res.set('Content-Type', registry.contentType);
     const metrics = await registry.metrics();
     res.send(metrics);
-  } catch (err) {
+  } catch {
     res.status(500).send('Failed to generate metrics');
   }
 });

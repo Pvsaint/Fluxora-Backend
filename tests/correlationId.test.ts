@@ -37,15 +37,16 @@ describe('correlationId middleware', () => {
 
   describe('ID propagation', () => {
     it('reuses the incoming x-correlation-id header', async () => {
-      const clientId = 'my-client-id-123';
+      // The middleware only honours valid UUIDv4 values.
+      const clientId = '11111111-1111-4111-8111-111111111111';
       const res = await request(app).get('/health').set(CORRELATION_ID_HEADER, clientId);
       expect(res.headers[CORRELATION_ID_HEADER]).toBe(clientId);
     });
 
     it('trims whitespace from incoming header', async () => {
-      const clientId = '  trimmed-id  ';
+      const clientId = '  22222222-2222-4222-8222-222222222222  ';
       const res = await request(app).get('/health').set(CORRELATION_ID_HEADER, clientId);
-      expect(res.headers[CORRELATION_ID_HEADER]).toBe('trimmed-id');
+      expect(res.headers[CORRELATION_ID_HEADER]).toBe('22222222-2222-4222-8222-222222222222');
     });
 
     it('generates a new ID when incoming header is an empty string', async () => {
@@ -143,7 +144,8 @@ describe('correlation ID propagation across transports', () => {
   }
 
   async function teardownWs(server: http.Server, hub: StreamHub): Promise<void> {
-    await new Promise((resolve) => hub.close(resolve));
+    await new Promise((resolve) => hub.close(() => resolve(undefined)));
+    server.close();
     await once(server, 'close');
   }
 
@@ -180,15 +182,35 @@ describe('correlation ID propagation across transports', () => {
     try {
       const clientCorrelationId = '123e4567-e89b-12d3-a456-426614174001';
       const ws = await connect(wsPort, { [CORRELATION_ID_HEADER]: clientCorrelationId });
+
+      // Collect any inbound messages on a persistent listener registered
+      // immediately after the connection opens. This avoids the race where
+      // once() is registered after the 'message' event has already fired.
+      const received: Record<string, unknown>[] = [];
+      ws.on('message', (data) => {
+        try {
+          received.push(JSON.parse(data.toString()) as Record<string, unknown>);
+        } catch {
+          /* ignore non-JSON */
+        }
+      });
+
       ws.send(JSON.stringify({ type: 'subscribe', streamId: 'stream-1' }));
+
+      // Wait for the server to register the subscription before broadcasting.
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
 
       await correlationStore.run('internal-corr-id-1', async () => {
         await hub.broadcast({ streamId: 'stream-1', eventId: 'evt-1', payload: { message: 'hello' } });
       });
 
-      const payload = (await nextMessage(ws)) as any;
-      expect(payload.type).toBe('stream_update');
-      expect(payload.correlationId).toBe('internal-corr-id-1');
+      // Allow the broadcast frame to traverse the loopback socket and the
+      // client's 'message' handler to run.
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+
+      const payload = received.find((m) => m.type === 'stream_update');
+      expect(payload).toBeDefined();
+      expect(payload?.correlationId).toBe('internal-corr-id-1');
 
       const clientState = Array.from((hub as any).clients.values())[0] as any;
       expect(clientState.correlationId).toBe(clientCorrelationId);
@@ -200,10 +222,10 @@ describe('correlation ID propagation across transports', () => {
 
   it('includes X-Correlation-ID when dispatching outgoing webhooks', async () => {
     let captured: RequestInit | undefined;
-    global.fetch = async (_url: string, options?: RequestInit) => {
+    global.fetch = (async (_url: string, options?: RequestInit) => {
       captured = options;
       return new Response(null, { status: 200 });
-    } as any;
+    }) as unknown as typeof fetch;
 
     await correlationStore.run('webhook-corr-123', async () => {
       const result = await webhookDispatcher.dispatch({

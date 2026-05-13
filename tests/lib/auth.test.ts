@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest';
 import { generateToken, verifyToken, UserPayload } from '../../src/lib/auth.js';
+import { initializeConfig } from '../../src/config/env.js';
 import {
   createApiKey,
   rotateApiKey,
@@ -12,6 +13,14 @@ import {
 // ─── JWT ──────────────────────────────────────────────────────────────────────
 
 describe('Auth Module', () => {
+  // generateToken/verifyToken consult the loaded Config for jwtSecret /
+  // jwtExpiresIn, so we must initialise the env-config before exercising them.
+  beforeAll(() => {
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'a-very-long-secret-key-for-testing-only-12345';
+    initializeConfig();
+  });
+
   const payload: UserPayload = {
     address: 'GCSX2...',
     role: 'operator',

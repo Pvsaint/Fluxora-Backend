@@ -80,10 +80,10 @@ export const streamEventService = {
    * @param event The blockchain event
    * @param correlationId Request ID for tracing
    */
-  processStreamCreated(
+  async processStreamCreated(
     event: StreamCreatedEvent,
     correlationId?: string,
-  ): EventIngestionResult {
+  ): Promise<EventIngestionResult> {
     const eventId = `${event.transactionHash}-${event.eventIndex}`;
 
     info("Processing StreamCreated event", {
@@ -116,34 +116,21 @@ export const streamEventService = {
       };
 
       // Upsert with idempotency
-      const result = streamRepository.upsertStream(input, correlationId);
+      const result = await streamRepository.upsertStream(input, correlationId);
 
       if (result.created) {
         info("Stream created from event", { streamId, eventId, correlationId });
         const hub = getStreamHub();
         if (hub) {
-          hub.broadcast({ 
-            streamId, 
-            eventId, 
-            payload: { ...input, event: 'stream.created' } 
-          }).catch(err => {
+          hub.broadcast({
+            streamId,
+            eventId,
+            payload: { ...input, event: 'stream.created' },
+          }).catch((err: Error) => {
             logError("Failed to broadcast stream created event", { streamId, eventId, error: err.message });
           });
         }
         return { eventId, streamId, action: "created", success: true };
-      } else if (result.updated) {
-        info("Stream updated from event", { streamId, eventId, correlationId });
-        const hub = getStreamHub();
-        if (hub) {
-          hub.broadcast({ 
-            streamId, 
-            eventId, 
-            payload: { ...input, event: 'stream.updated' } 
-          }).catch(err => {
-            logError("Failed to broadcast stream updated event", { streamId, eventId, error: err.message });
-          });
-        }
-        return { eventId, streamId, action: "updated", success: true };
       } else {
         debug("Stream already exists (idempotent)", {
           streamId,
@@ -175,10 +162,10 @@ export const streamEventService = {
    * @param event The blockchain event
    * @param correlationId Request ID for tracing
    */
-  processStreamUpdated(
+  async processStreamUpdated(
     event: StreamUpdatedEvent,
     correlationId?: string,
-  ): EventIngestionResult {
+  ): Promise<EventIngestionResult> {
     const eventId = `${event.transactionHash}-${event.eventIndex}`;
 
     info("Processing StreamUpdated event", {
@@ -189,7 +176,7 @@ export const streamEventService = {
 
     try {
       // Get current stream state
-      const existing = streamRepository.getById(event.streamId);
+      const existing = await streamRepository.getById(event.streamId);
 
       if (!existing) {
         warn("Stream not found for update", {
@@ -218,7 +205,7 @@ export const streamEventService = {
       };
 
       if (Object.keys(update).length > 0) {
-        streamRepository.updateStream(event.streamId, update, correlationId);
+        await streamRepository.updateStream(event.streamId, update, correlationId);
         info("Stream updated from event", {
           streamId: event.streamId,
           eventId,
@@ -226,11 +213,11 @@ export const streamEventService = {
         });
         const hub = getStreamHub();
         if (hub) {
-          hub.broadcast({ 
-            streamId: event.streamId, 
-            eventId, 
-            payload: { ...update, event: 'stream.updated' } 
-          }).catch(err => {
+          hub.broadcast({
+            streamId: event.streamId,
+            eventId,
+            payload: { ...update, event: 'stream.updated' },
+          }).catch((err: Error) => {
             logError("Failed to broadcast stream updated event", { streamId: event.streamId, eventId, error: err.message });
           });
         }
@@ -271,10 +258,10 @@ export const streamEventService = {
    * @param event The blockchain event
    * @param correlationId Request ID for tracing
    */
-  processStreamCancelled(
+  async processStreamCancelled(
     event: StreamCancelledEvent,
     correlationId?: string,
-  ): EventIngestionResult {
+  ): Promise<EventIngestionResult> {
     const eventId = `${event.transactionHash}-${event.eventIndex}`;
 
     info("Processing StreamCancelled event", {
@@ -284,7 +271,7 @@ export const streamEventService = {
     });
 
     try {
-      streamRepository.updateStream(
+      await streamRepository.updateStream(
         event.streamId,
         { status: "cancelled" },
         correlationId,
@@ -296,11 +283,11 @@ export const streamEventService = {
       });
       const hub = getStreamHub();
       if (hub) {
-        hub.broadcast({ 
-          streamId: event.streamId, 
-          eventId, 
-          payload: { status: 'cancelled', event: 'stream.cancelled' } 
-        }).catch(err => {
+        hub.broadcast({
+          streamId: event.streamId,
+          eventId,
+          payload: { status: 'cancelled', event: 'stream.cancelled' },
+        }).catch((err: Error) => {
           logError("Failed to broadcast stream cancelled event", { streamId: event.streamId, eventId, error: err.message });
         });
       }
@@ -333,10 +320,10 @@ export const streamEventService = {
    * @param event The blockchain event
    * @param correlationId Request ID for tracing
    */
-  processEvent(
+  async processEvent(
     event: StreamEvent,
     correlationId?: string,
-  ): EventIngestionResult {
+  ): Promise<EventIngestionResult> {
     switch (event.type) {
       case "StreamCreated":
         return this.processStreamCreated(event, correlationId);
@@ -344,15 +331,16 @@ export const streamEventService = {
         return this.processStreamUpdated(event, correlationId);
       case "StreamCancelled":
         return this.processStreamCancelled(event, correlationId);
-      default:
+      default: {
         const exhaustiveCheck: never = event;
         return {
           eventId: "",
           streamId: "",
           action: "created",
           success: false,
-          error: `Unknown event type: ${exhaustiveCheck}`,
+          error: `Unknown event type: ${exhaustiveCheck as string}`,
         };
+      }
     }
   },
 
@@ -362,16 +350,16 @@ export const streamEventService = {
    * @param events Array of events to process
    * @param correlationId Request ID for tracing
    */
-  processBatch(
+  async processBatch(
     events: StreamEvent[],
     correlationId?: string,
-  ): EventIngestionResult[] {
+  ): Promise<EventIngestionResult[]> {
     info("Processing event batch", { count: events.length, correlationId });
 
     const results: EventIngestionResult[] = [];
 
     for (const event of events) {
-      results.push(this.processEvent(event, correlationId));
+      results.push(await this.processEvent(event, correlationId));
     }
 
     const successCount = results.filter((r) => r.success).length;

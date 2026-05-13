@@ -163,15 +163,19 @@ function encodeCursor(lastId: string): string {
 }
 
 function decodeCursor(cursor: string): StreamsCursor {
+    let decoded: string;
     try {
-        const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
-        if (!/^stream-\d+$/.test(decoded)) {
-            throw new Error('Invalid stream ID format');
-        }
-        return { lastId: decoded };
+        decoded = Buffer.from(cursor, 'base64').toString('utf-8');
     } catch {
         throw new Error('Invalid cursor format');
     }
+    if (!decoded || !/^[\x20-\x7e]+$/.test(decoded)) {
+        throw new Error('Invalid cursor format');
+    }
+    if (!/^stream-\d+$/.test(decoded)) {
+        throw new Error('Invalid stream ID format');
+    }
+    return { lastId: decoded };
 }
 
 function parseLimit(limitParam: unknown): number {
@@ -217,8 +221,14 @@ function parseIncludeTotal(includeTotalParam: unknown): boolean {
 }
 
 function parseIdempotencyKey(headerValue: unknown): string {
-    if (!headerValue || typeof headerValue !== 'string') {
+    if (headerValue === undefined || headerValue === null) {
         throw new Error('Idempotency-Key header is required and must be a string');
+    }
+    if (typeof headerValue !== 'string') {
+        throw new Error('Idempotency-Key header is required and must be a string');
+    }
+    if (headerValue === '') {
+        throw new Error('Idempotency-Key header cannot be empty');
     }
 
     const trimmed = headerValue.trim();

@@ -6,7 +6,9 @@ function mockRequest(props: Partial<Request> = {}): Request & { ip?: string } {
   return {
     headers: {},
     socket: { remoteAddress: '10.0.0.1' } as any,
-    path: '/api/streams',
+    // Use a path that does not match any ROUTE_BUDGETS so the env-driven
+    // limits in this test apply directly.
+    path: '/__rate-limit-test__',
     method: 'GET',
     ip: '10.0.0.1',
     ...props,

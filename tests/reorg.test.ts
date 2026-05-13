@@ -33,6 +33,8 @@ import { isLedgerRolledBack, _resetRolledBackLedgers } from '../src/indexer/serv
 import { dispatchWebhook } from '../src/webhooks/dispatcher.js';
 
 const INDEXER_TOKEN = 'test-reorg-token';
+const TOKEN = INDEXER_TOKEN;
+const ENDPOINT = '/internal/indexer/contract-events';
 
 function buildEvent(eventId: string, ledger: number, ledgerHash: string, eventIndex = 0) {
   return {
@@ -59,6 +61,9 @@ function post(events: unknown[]) {
     .set('x-indexer-worker-token', TOKEN)
     .send({ events });
 }
+
+// Alias for older test call-sites that used the longer name.
+const postEvents = post;
 
 async function getHealth() {
   const res = await request(app).get('/health').expect(200);
@@ -97,11 +102,11 @@ describe('Indexer reorg handling', () => {
     expect(store.all().length).toBe(2);
 
     const reorgResponse = await postEvents([buildEvent('evt-101-new', 101, 'hash-101-reorg')]).expect(200);
-    expect(reorgResponse.body.insertedCount).toBe(1);
+    expect(reorgResponse.body.data.insertedCount).toBe(1);
 
     const records = store.all();
-    // Should still have 10 records — the reorged chain, not 20
-    expect(records).toHaveLength(10);
+    // After reorg at ledger 101: evt-100 (kept) + evt-101-new (canonical) = 2.
+    expect(records).toHaveLength(2);
 
     const health = await request(app).get('/health').expect(200);
     expect(health.body.dependencies.indexer.reorgDetected).toBe(true);

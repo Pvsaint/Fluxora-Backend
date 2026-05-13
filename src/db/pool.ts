@@ -70,7 +70,7 @@ export function createPool(config?: PoolConfig): pg.Pool {
   const cfg = config ?? resolvePoolConfig();
   const pool = new Pool(cfg);
 
-  pool.on('error', (err) => {
+  pool.on('error', (err: Error) => {
     logger.error('Postgres pool error', undefined, { error: err.message });
   });
 

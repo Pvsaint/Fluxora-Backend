@@ -11,7 +11,7 @@
  * - error: Failures requiring operator attention
  */
 
-import { sanitize, sanitizeError, redactKeysInString } from '../pii/sanitizer.js';
+import { sanitize, redactKeysInString } from '../pii/sanitizer.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

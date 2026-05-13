@@ -19,8 +19,6 @@
  */
 
 import { logger } from '../lib/logger.js';
-import { traceSpan } from '../tracing/hooks.js';
-import { getCorrelationId } from '../tracing/middleware.js';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -193,6 +191,31 @@ export class StellarRpcService {
 
   /** Reset the circuit breaker (manual recovery). */
   resetCircuit(): void { this.breaker.reset(); }
+
+  /**
+   * Snapshot of the current degradation posture, consumed by the
+   * `rpcDegradationMiddleware` to decide whether requests should be served
+   * normally, with a staleness warning, or rejected outright.
+   */
+  getDegradationSnapshot(): {
+    circuitState: CircuitState;
+    degraded: boolean;
+    failureCount: number;
+    openedAt: number | null;
+    timestamp: string;
+  } {
+    const circuitState = this.breaker.getState();
+    const openedAtRaw = this.breaker.getOpenedAt();
+    return {
+      circuitState,
+      degraded: circuitState !== 'CLOSED',
+      failureCount: this.breaker.getFailureCount(),
+      // Surface 0 as `null` so callers can use `openedAt != null` as a
+      // "circuit has ever been open" predicate.
+      openedAt: openedAtRaw === 0 ? null : openedAtRaw,
+      timestamp: new Date().toISOString(),
+    };
+  }
 
   async getLatestLedger(opts: RpcCallOptions = {}): Promise<{ sequence: number }> {
     return this.breaker.call(() => this.callWithTimeout(

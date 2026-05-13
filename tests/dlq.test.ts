@@ -15,18 +15,29 @@
  * - 200 DELETE (acknowledge) entry
  * - 400 for invalid pagination params
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterEach } from 'vitest';
 import request from 'supertest';
-import app from '../src/index.js';
+import { app } from '../src/index.js';
 import { webhookDeliveryStore } from '../src/webhooks/store.js';
 import { webhookService } from '../src/webhooks/service.js';
 import type { WebhookDelivery, WebhookEvent } from '../src/webhooks/types.js';
 import { enqueueDeadLetter, _resetDlq } from '../src/routes/dlq.js';
 import { getAuditEntries, _resetAuditLog } from '../src/lib/auditLog.js';
+import { generateToken } from '../src/lib/auth.js';
+import { initializeConfig } from '../src/config/env.js';
 
-// Test tokens (these should match your test setup)
-const operatorToken = 'operator-test-token';
-const viewerToken = 'viewer-test-token';
+// Test tokens — generated against the real JWT secret so the auth middleware
+// accepts them.  The role drives the operator vs viewer guard checks.
+let operatorToken: string;
+let viewerToken: string;
+
+beforeAll(() => {
+  process.env.NODE_ENV = 'test';
+  process.env.JWT_SECRET = 'a-very-long-secret-key-for-testing-only-12345';
+  initializeConfig();
+  operatorToken = generateToken({ address: 'GOPERATOR', role: 'operator' });
+  viewerToken = generateToken({ address: 'GVIEWER', role: 'viewer' });
+});
 
 // Mock fetch for testing
 const originalFetch = global.fetch;
@@ -88,9 +99,9 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.entries).toEqual([]);
-    expect(res.body.total).toBe(0);
-    expect(res.body.has_more).toBe(false);
+    expect(res.body.data.entries).toEqual([]);
+    expect(res.body.data.total).toBe(0);
+    expect(res.body.data.has_more).toBe(false);
   });
 
   it('GET /admin/dlq → 200 returns all entries', async () => {
@@ -102,9 +113,9 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.entries).toHaveLength(2);
-    expect(res.body.total).toBe(2);
-    expect(res.body.has_more).toBe(false);
+    expect(res.body.data.entries).toHaveLength(2);
+    expect(res.body.data.total).toBe(2);
+    expect(res.body.data.has_more).toBe(false);
   });
 
   it('GET /admin/dlq?limit=1 → pagination with has_more=true', async () => {
@@ -116,11 +127,11 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.entries).toHaveLength(1);
-    expect(res.body.has_more).toBe(true);
-    expect(res.body.total).toBe(2);
-    expect(res.body.limit).toBe(1);
-    expect(res.body.offset).toBe(0);
+    expect(res.body.data.entries).toHaveLength(1);
+    expect(res.body.data.has_more).toBe(true);
+    expect(res.body.data.total).toBe(2);
+    expect(res.body.data.limit).toBe(1);
+    expect(res.body.data.offset).toBe(0);
   });
 
   it('GET /admin/dlq?offset=1 → second page', async () => {
@@ -132,9 +143,9 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.entries).toHaveLength(1);
-    expect(res.body.has_more).toBe(false);
-    expect(res.body.offset).toBe(1);
+    expect(res.body.data.entries).toHaveLength(1);
+    expect(res.body.data.has_more).toBe(false);
+    expect(res.body.data.offset).toBe(1);
   });
 
   it('GET /admin/dlq?topic=stream.cancelled → filters by topic', async () => {
@@ -146,9 +157,9 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.entries).toHaveLength(1);
-    expect(res.body.entries[0].topic).toBe('stream.cancelled');
-    expect(res.body.total).toBe(1);
+    expect(res.body.data.entries).toHaveLength(1);
+    expect(res.body.data.entries[0].topic).toBe('stream.cancelled');
+    expect(res.body.data.total).toBe(1);
   });
 
   it('GET /admin/dlq?limit=0 → 400 VALIDATION_ERROR', async () => {
@@ -185,9 +196,9 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.entry.id).toBe(entry.id);
-    expect(res.body.entry.topic).toBe('test.topic');
-    expect(res.body.entry.attempts).toBe(2);
+    expect(res.body.data.entry.id).toBe(entry.id);
+    expect(res.body.data.entry.topic).toBe('test.topic');
+    expect(res.body.data.entry.attempts).toBe(2);
   });
 
   it('GET /admin/dlq/:id → 404 for unknown id', async () => {
@@ -208,7 +219,7 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(del.body.id).toBe(entry.id);
+    expect(del.body.data.id).toBe(entry.id);
 
     // Confirm it's gone
     await request(app)
@@ -273,9 +284,9 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.message).toBe('DLQ entry replayed');
-    expect(res.body.id).toBe(entry.id);
-    expect(res.body.topic).toBe('stream.created');
+    expect(res.body.data.message).toBe('DLQ entry replayed');
+    expect(res.body.data.id).toBe(entry.id);
+    expect(res.body.data.topic).toBe('stream.created');
 
     // Verify audit logging
     const auditEntries = getAuditEntries();
@@ -305,7 +316,7 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(getRes.body.entry.attempts).toBe(0);
+    expect(getRes.body.data.entry.attempts).toBe(0);
   });
 
   it('POST /admin/dlq/:id/replay requires operator role', async () => {
@@ -336,10 +347,10 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.message).toBe('DLQ entries purged');
-    expect(res.body.purged).toBe(2);
-    expect(res.body.topicFilter).toBe('all');
-    expect(res.body.removedIds).toHaveLength(2);
+    expect(res.body.data.message).toBe('DLQ entries purged');
+    expect(res.body.data.purged).toBe(2);
+    expect(res.body.data.topicFilter).toBe('all');
+    expect(res.body.data.removedIds).toHaveLength(2);
 
     // Verify audit logging
     const auditEntries = getAuditEntries();
@@ -360,8 +371,8 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.purged).toBe(2);
-    expect(res.body.topicFilter).toBe('stream.created');
+    expect(res.body.data.purged).toBe(2);
+    expect(res.body.data.topicFilter).toBe('stream.created');
 
     // Verify remaining entries
     const listRes = await request(app)
@@ -369,8 +380,8 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(listRes.body.total).toBe(1);
-    expect(listRes.body.entries[0].topic).toBe('stream.cancelled');
+    expect(listRes.body.data.total).toBe(1);
+    expect(listRes.body.data.entries[0].topic).toBe('stream.cancelled');
   });
 
   it('DELETE /admin/dlq handles empty DLQ gracefully', async () => {
@@ -379,8 +390,8 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.message).toBe('No DLQ entries to purge');
-    expect(res.body.purged).toBe(0);
+    expect(res.body.data.message).toBe('No DLQ entries to purge');
+    expect(res.body.data.purged).toBe(0);
   });
 
   it('DELETE /admin/dlq requires operator role', async () => {
@@ -399,7 +410,7 @@ describe('Webhook Dead-Letter Queue', () => {
       .set('Authorization', `Bearer ${operatorToken}`)
       .expect(200);
 
-    expect(res.body.message).toBe('No DLQ entries to purge');
-    expect(res.body.purged).toBe(0);
+    expect(res.body.data.message).toBe('No DLQ entries to purge');
+    expect(res.body.data.purged).toBe(0);
   });
 });

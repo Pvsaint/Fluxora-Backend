@@ -33,8 +33,8 @@ async function startServer() {
     const app = createApp();
     const server = http.createServer(app);
 
-    // Initialize WebSocket hub
-    const hub = createStreamHub(server);
+    // Initialize WebSocket hub (registered on the HTTP server as a side effect)
+    createStreamHub(server);
     logger.info('WebSocket hub initialized', undefined, { path: '/ws/streams' });
 
     // Register shutdown hooks
@@ -110,4 +110,9 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-void startServer();
+// Skip server bootstrapping when this module is imported by tests.  Tests
+// pull in `{ app }` for supertest; they should not bind a port or wire up
+// signal handlers.
+if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+  void startServer();
+}

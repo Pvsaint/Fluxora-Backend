@@ -9,7 +9,7 @@
  *   - BODY_LIMIT_BYTES constant: exported value equals 256 KiB
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 import {

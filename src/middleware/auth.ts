@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { verifyToken, UserPayload } from '../lib/auth.js';
-import { getApiKeyFromRequest, isValidApiKey } from '../lib/apiKey.js';
-import { ApiError, ApiErrorCode } from './errorHandler.js';
+import { verifyToken } from '../lib/auth.js';
+import { ApiErrorCode } from './errorHandler.js';
 import { warn, info, debug } from '../utils/logger.js';
 
 /**
@@ -12,8 +11,7 @@ import { warn, info, debug } from '../utils/logger.js';
  */
 export function authenticate(req: Request, res: Response, next: NextFunction): void {
   const authHeader = req.headers.authorization;
-  const requestId = (req as any).id || (req as any).correlationId;
-  const apiKey = getApiKeyFromRequest(req.headers as Record<string, string | string[] | undefined>);
+  const requestId = req.id ?? req.correlationId;
 
   debug('Authentication middleware triggered', { hasAuthHeader: !!authHeader, requestId });
 
@@ -50,7 +48,7 @@ export function authenticate(req: Request, res: Response, next: NextFunction): v
  * Must be used after `authenticate` middleware.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const requestId = (req as any).id || (req as any).correlationId;
+  const requestId = req.id ?? req.correlationId;
   if (!req.user) {
     warn('Anonymous access denied to protected route', { path: req.path, requestId });
     res.status(401).json({

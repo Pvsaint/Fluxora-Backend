@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { assessIndexerHealth, DEFAULT_INDEXER_STALL_THRESHOLD_MS } from '../indexer/stall.js';
-import { HealthCheckManager, type HealthStatus } from '../config/health.js';
+import { HealthCheckManager, type HealthStatus, type DependencyHealth } from '../config/health.js';
 import { Logger } from '../config/logger.js';
 import { Config } from '../config/env.js';
 import { successResponse, errorResponse } from '../utils/response.js';
@@ -20,18 +20,17 @@ export const healthRouter = Router();
  *  - Never exposes internal config values (connection strings, secrets).
  */
 healthRouter.get('/', (req: Request, res: Response) => {
-  // Return 503 during graceful shutdown
+  // Return 503 during graceful shutdown.  The body uses a flat shape so
+  // operators reading `/health` always see `status` at the top level.
   if (isShuttingDown()) {
-    res.status(503).json(
-      successResponse({
-        status: 'shutting_down',
-        service: 'fluxora-backend',
-        network: req.app.locals.config?.stellarNetwork ?? 'unknown',
-        contractAddresses: (req.app.locals.config as Config | undefined)?.contractAddresses ?? {},
-        timestamp: new Date().toISOString(),
-        message: 'Service is shutting down',
-      })
-    );
+    res.status(503).json({
+      status: 'shutting_down',
+      service: 'fluxora-backend',
+      network: req.app.locals.config?.stellarNetwork ?? 'unknown',
+      contractAddresses: (req.app.locals.config as Config | undefined)?.contractAddresses ?? {},
+      timestamp: new Date().toISOString(),
+      message: 'Service is shutting down',
+    });
     return;
   }
 
@@ -80,10 +79,23 @@ healthRouter.get('/', (req: Request, res: Response) => {
  *    consumption by load-balancer health checks and dashboards.
  *  - `version` is always present for cache-busting and audit trails.
  */
-healthRouter.get('/ready', async (req: Request, res: Response) => {
+healthRouter.get('/ready', async (req: Request, res: Response): Promise<void> => {
+  const logger = req.app.locals.logger as Logger | undefined;
+  const healthManager = req.app.locals.healthManager as HealthCheckManager | undefined;
+
   // Return 503 during graceful shutdown
   if (isShuttingDown()) {
-    return res.status(503).json(errorResponse('SERVICE_SHUTTING_DOWN', 'Service is shutting down'));
+    res.status(503).json(errorResponse('SERVICE_SHUTTING_DOWN', 'Service is shutting down'));
+    return;
+  }
+
+  if (!healthManager) {
+    res.status(503).json({
+      status: 'unhealthy',
+      reason: 'Health manager not configured',
+      dependencies: {},
+    });
+    return;
   }
 
   try {
@@ -97,24 +109,31 @@ healthRouter.get('/ready', async (req: Request, res: Response) => {
 
     if (report.status === 'unhealthy') {
       logger?.warn('Readiness check failed', {
-        dependencies: report.dependencies.map((d) => ({
+        dependencies: report.dependencies.map((d: DependencyHealth) => ({
           name: d.name,
           status: d.status,
           error: d.error,
         })),
       });
-      return res.status(503).json(errorResponse('SERVICE_UNAVAILABLE', 'Service not ready', report));
+      // 503 for unhealthy; return the same flat shape as the healthy / degraded
+      // responses so dashboards and probes can parse a single schema.
+      res.status(503).json({
+        status: report.status,
+        version: report.version,
+        dependencies,
+      });
+      return;
     }
 
     // "degraded" is still ready — return 200 so load balancers keep routing
     // traffic, but signal the degraded state for observability.
-    return res.status(200).json({
+    res.status(200).json({
       status: report.status, // "healthy" | "degraded"
       version: report.version,
       dependencies,
     });
   } catch (err) {
-    logger.error('Readiness check error', err as Error);
+    logger?.error('Readiness check error', err as Error);
     res.status(503).json(errorResponse('HEALTH_CHECK_ERROR', 'Health check failed'));
   }
 });
@@ -135,7 +154,7 @@ healthRouter.get('/live', async (req: Request, res: Response) => {
       : { status: 'healthy', version: '0.1.0', timestamp: new Date().toISOString(), uptime: 0, dependencies: [] };
     res.json(successResponse({ report }));
   } catch (err) {
-    logger.error('Failed to get health report', err as Error);
+    logger?.error('Failed to get health report', err as Error);
     res.status(500).json(errorResponse('HEALTH_CHECK_ERROR', 'Failed to get health report'));
   }
 });

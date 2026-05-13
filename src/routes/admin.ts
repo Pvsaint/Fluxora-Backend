@@ -96,7 +96,7 @@ adminRouter.put('/pause', (req, res) => {
     'PAUSE_FLAGS_UPDATED',
     'pauseFlags',
     'system',
-    (req as any).correlationId,
+    req.correlationId,
     {
       previous,
       updated,
@@ -136,7 +136,7 @@ adminRouter.post('/reindex', async (_req, res) => {
     'REINDEX_TRIGGERED',
     'reindex',
     'system',
-    (_req as any).correlationId,
+    _req.correlationId,
     { status: state.status, startedAt: state.startedAt },
   );
 

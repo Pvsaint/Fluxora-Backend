@@ -68,7 +68,7 @@ describe('CircuitBreaker', () => {
     for (let i = 0; i < 3; i++) {
       await expect(breaker.call(async () => { throw new Error('fail'); })).rejects.toThrow();
     }
-    const fn = jest.fn<() => Promise<string>>().mockResolvedValue('ok');
+    const fn = vi.fn<() => Promise<string>>().mockResolvedValue('ok');
     await expect(breaker.call(fn)).rejects.toBeInstanceOf(CircuitOpenError);
     expect(fn).not.toHaveBeenCalled();
   });
@@ -140,23 +140,23 @@ describe('CircuitBreaker', () => {
 
 describe('StellarRpcService', () => {
   it('returns ledger on success', async () => {
-    const client = { getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockResolvedValue({ sequence: 100 }) };
+    const client = { getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockResolvedValue({ sequence: 100 }) };
     const svc = new StellarRpcService(() => client, { failureThreshold: 3 });
     expect(await svc.getLatestLedger()).toEqual({ sequence: 100 });
   });
 
   it('throws RpcProviderError on RPC failure', async () => {
     const client = {
-      getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('503 Service Unavailable')),
+      getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('503 Service Unavailable')),
     };
     const svc = new StellarRpcService(() => client, { failureThreshold: 5 });
     await expect(svc.getLatestLedger()).rejects.toBeInstanceOf(RpcProviderError);
   });
 
   it('logs warn with error code and duration on failure', async () => {
-    const writeSpy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const writeSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const client = {
-      getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(
+      getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(
         Object.assign(new Error('429 Too Many Requests'), { statusCode: 429 }),
       ),
     };
@@ -173,7 +173,7 @@ describe('StellarRpcService', () => {
 
   it('throws CircuitOpenError after threshold failures', async () => {
     const client = {
-      getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('fail')),
+      getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('fail')),
     };
     const svc = new StellarRpcService(() => client, { failureThreshold: 3, windowMs: 30_000, resetTimeoutMs: 60_000 });
     for (let i = 0; i < 3; i++) {
@@ -185,7 +185,7 @@ describe('StellarRpcService', () => {
 
   it('times out and throws RpcProviderError', async () => {
     const client = {
-      getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockImplementation(
+      getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockImplementation(
         () => new Promise(() => { /* never resolves */ }),
       ),
     };
@@ -195,7 +195,7 @@ describe('StellarRpcService', () => {
 
   it('resetCircuit() allows calls again after being OPEN', async () => {
     const client = {
-      getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>()
+      getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>()
         .mockRejectedValueOnce(new Error('fail'))
         .mockRejectedValueOnce(new Error('fail'))
         .mockRejectedValueOnce(new Error('fail'))
@@ -213,7 +213,7 @@ describe('StellarRpcService', () => {
 
   describe('getDegradationSnapshot()', () => {
     it('reports not degraded when circuit is CLOSED', () => {
-      const client = { getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockResolvedValue({ sequence: 1 }) };
+      const client = { getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockResolvedValue({ sequence: 1 }) };
       const svc = new StellarRpcService(() => client, { failureThreshold: 5 });
       const snap = svc.getDegradationSnapshot();
       expect(snap.circuitState).toBe('CLOSED');
@@ -225,7 +225,7 @@ describe('StellarRpcService', () => {
 
     it('reports degraded with failure details when circuit is OPEN', async () => {
       const client = {
-        getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('down')),
+        getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('down')),
       };
       const svc = new StellarRpcService(() => client, { failureThreshold: 2, windowMs: 30_000, resetTimeoutMs: 60_000 });
       for (let i = 0; i < 2; i++) {
@@ -240,7 +240,7 @@ describe('StellarRpcService', () => {
 
     it('reports degraded when circuit is HALF_OPEN', async () => {
       const client = {
-        getLatestLedger: jest.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('down')),
+        getLatestLedger: vi.fn<() => Promise<{ sequence: number }>>().mockRejectedValue(new Error('down')),
       };
       // resetTimeoutMs=0 means the breaker immediately enters HALF_OPEN on next call
       const svc = new StellarRpcService(() => client, { failureThreshold: 1, windowMs: 30_000, resetTimeoutMs: 0 });

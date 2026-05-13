@@ -3,6 +3,20 @@ import { StreamEventReplayFilter, StreamEventReplayResult, StreamEventRecord } f
 
 export type InsertContractEventsResult = { insertedEventIds: string[]; duplicateEventIds: string[]; };
 
+/** Record of a chain reorg that evicted previously stored events. */
+export interface ReorgRecord {
+  /** The ledger at which the fork occurred — all events at or above this were evicted. */
+  forkLedger: number;
+  /** The ledger hash that was evicted from the store. */
+  evictedHash: string;
+  /** The ledger hash that replaced the evicted one (empty when not yet observed). */
+  incomingHash: string;
+  /** Event IDs that were removed as part of this rollback. */
+  removedEventIds: string[];
+  /** ISO-8601 timestamp at which the rollback was applied. */
+  rolledBackAt: string;
+}
+
 export interface ContractEventStore {
   readonly kind: IndexerStoreKind;
   insertMany(events: ContractEventRecord[]): Promise<InsertContractEventsResult>;
@@ -122,6 +136,7 @@ export class InMemoryContractEventStore implements ContractEventStore {
 
   reset(): void {
     this.records.clear();
+    this.reorgLog.length = 0;
   }
 
   all(): ContractEventRecord[] {

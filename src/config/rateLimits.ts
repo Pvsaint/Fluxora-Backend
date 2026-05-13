@@ -119,8 +119,14 @@ export function getRouteRateLimitConfig(path: string): RouteRateLimitConfig | nu
       if (patternParts.length === pathParts.length) {
         let matches = true;
         for (let i = 0; i < patternParts.length; i++) {
-          if (patternParts[i].startsWith(':')) continue; // Parameter matches anything
-          if (patternParts[i] !== pathParts[i]) {
+          const patternPart = patternParts[i];
+          const pathPart = pathParts[i];
+          if (patternPart === undefined || pathPart === undefined) {
+            matches = false;
+            break;
+          }
+          if (patternPart.startsWith(':')) continue; // Parameter matches anything
+          if (patternPart !== pathPart) {
             matches = false;
             break;
           }

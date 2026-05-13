@@ -1,0 +1,16 @@
+/**
+ * Vitest global setup.
+ *
+ * Runs once before any test file is imported.  Sets the environment-driven
+ * configuration that every test relies on:
+ *
+ * - `RATE_LIMIT_ENABLED=false` so route tests do not see 429s as side-effects
+ *   of other tests in the same process.
+ * - `NODE_ENV=test` and a deterministic `JWT_SECRET` so `generateToken()` /
+ *   `verifyToken()` work without each test having to re-initialise config.
+ */
+
+process.env.NODE_ENV = process.env.NODE_ENV ?? 'test';
+process.env.RATE_LIMIT_ENABLED = process.env.RATE_LIMIT_ENABLED ?? 'false';
+process.env.JWT_SECRET =
+  process.env.JWT_SECRET ?? 'a-very-long-secret-key-for-testing-only-12345';

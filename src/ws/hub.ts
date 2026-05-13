@@ -188,15 +188,18 @@ export class StreamHub {
     const connectedAt = Date.now();
     const correlationId = this.extractCorrelationId(req.headers);
 
-    this.clients.set(ws, {
+    const state: ClientState = {
       id: connectionId,
       connectedAt,
       ip,
-      correlationId,
       metrics: { messagesReceived: 0, messagesSent: 0, bytesReceived: 0, bytesSent: 0 },
       subscriptions: new Set(),
       messageTimestamps: [],
-    });
+    };
+    if (correlationId !== undefined) {
+      state.correlationId = correlationId;
+    }
+    this.clients.set(ws, state);
 
     logger.info('WebSocket connected', correlationId, {
       event: 'ws_connect',

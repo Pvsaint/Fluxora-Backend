@@ -103,9 +103,9 @@ async function uploadStreamToS3(readable: Readable, target: S3Target): Promise<v
     const s3Mod = await import('@aws-sdk/client-s3')
     // @ts-ignore — @aws-sdk/lib-storage is an optional peer dependency
     const uploadMod = await import('@aws-sdk/lib-storage')
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+     
     S3Client = s3Mod.S3Client
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+     
     Upload = uploadMod.Upload
   } catch {
     throw new Error(
@@ -119,10 +119,10 @@ async function uploadStreamToS3(readable: Readable, target: S3Target): Promise<v
     process.env['AWS_DEFAULT_REGION'] ??
     'us-east-1'
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+   
   const client = new S3Client({ region })
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+   
   const upload = new Upload({
     client,
     params: { Bucket: target.bucket, Key: target.key, Body: readable },
@@ -130,7 +130,7 @@ async function uploadStreamToS3(readable: Readable, target: S3Target): Promise<v
     queueSize: 4,
   })
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+   
   await upload.done()
 }
 
@@ -302,9 +302,9 @@ export async function restoreDatabase(
       try {
         // @ts-ignore — @aws-sdk/client-s3 is an optional peer dependency
         const s3Mod = await import('@aws-sdk/client-s3')
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+         
         S3Client = s3Mod.S3Client
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+         
         GetObjectCommand = s3Mod.GetObjectCommand
       } catch {
         return {
@@ -320,11 +320,11 @@ export async function restoreDatabase(
         process.env['AWS_DEFAULT_REGION'] ??
         'us-east-1'
 
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+       
       const client = new S3Client({ region })
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+       
       const response = await client.send(
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+         
         new GetObjectCommand({ Bucket: s3Source.bucket, Key: s3Source.key }),
       ) as { Body?: Readable }
 

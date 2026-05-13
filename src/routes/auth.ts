@@ -57,7 +57,7 @@ authRouter.post(
   '/session',
   asyncHandler(async (req: Request, res: Response) => {
     const result = SessionRequestSchema.safeParse(req.body);
-    const requestId = (req as any).id || (req as any).correlationId;
+    const requestId = req.id ?? req.correlationId;
 
     if (!result.success) {
       throw validationError('Invalid session request', result.error.format());

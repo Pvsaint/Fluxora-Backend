@@ -28,6 +28,17 @@ import { logger } from './logger.js';
 
 export type AuditAction = 'STREAM_CREATED' | 'STREAM_CANCELLED' | 'STREAM_STATUS_UPDATED' | 'DLQ_LISTED' | 'DLQ_REPLAYED' | 'DLQ_PURGED' | 'PAUSE_FLAGS_UPDATED' | 'REINDEX_TRIGGERED';
 
+/**
+ * Minimal prepare/run shape used by {@link writeAuditEntryToDb}.
+ *
+ * Defined locally so this module does not couple to a specific driver
+ * (SQLite, pg, mock).  Any object that exposes a synchronous `prepare()`
+ * returning a `.run(...)` callable satisfies the contract.
+ */
+export interface AuditDbConnection {
+  prepare(sql: string): { run(...params: unknown[]): unknown };
+}
+
 export interface AuditEntry {
   /** Monotonically increasing sequence number within this process lifetime. */
   seq: number;
@@ -46,10 +57,10 @@ export interface AuditEntry {
 
 let seq = 0;
 const AUDIT_LOG_KEY = '__FLUXORA_AUDIT_LOG__';
-if (!(globalThis as any)[AUDIT_LOG_KEY]) {
-  (globalThis as any)[AUDIT_LOG_KEY] = [];
+if (!(globalThis as Record<string, unknown>)[AUDIT_LOG_KEY]) {
+  (globalThis as Record<string, unknown>)[AUDIT_LOG_KEY] = [];
 }
-const auditLog: AuditEntry[] = (globalThis as any)[AUDIT_LOG_KEY];
+const auditLog: AuditEntry[] = (globalThis as Record<string, unknown>)[AUDIT_LOG_KEY] as AuditEntry[];
 
 // ── In-memory path (non-transactional) ───────────────────────────────────────
 
@@ -146,14 +157,15 @@ export function writeAuditEntryToDb(db: AuditDbConnection, entry: AuditEntry): v
 
 /** Return a shallow copy of all in-memory entries (oldest first). */
 export function getAuditEntries(): AuditEntry[] {
-  return [...((globalThis as any)[AUDIT_LOG_KEY] || [])];
+  const log = (globalThis as Record<string, unknown>)[AUDIT_LOG_KEY] as AuditEntry[] | undefined;
+  return [...(log ?? [])];
 }
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
 /** Reset store — test use only. */
 export function _resetAuditLog(): void {
-  const log = (globalThis as any)[AUDIT_LOG_KEY];
+  const log = (globalThis as Record<string, unknown>)[AUDIT_LOG_KEY];
   if (Array.isArray(log)) {
     log.length = 0;
   }

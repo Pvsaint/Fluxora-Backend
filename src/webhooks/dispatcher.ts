@@ -1,11 +1,10 @@
-import { randomUUID } from 'node:crypto';
 import { logger } from '../lib/logger.js';
 import { CORRELATION_ID_HEADER } from '../middleware/correlationId.js';
 import { getCorrelationId } from '../tracing/middleware.js';
 import type { WebhookDeliveryAttempt, WebhookRetryPolicy } from './types.js';
 import { DEFAULT_RETRY_POLICY } from './types.js';
 import { computeWebhookSignature } from './signature.js';
-import { calculateNextRetryTime, shouldRetry, isRetryableStatusCode } from './retry.js';
+import { calculateNextRetryTime, shouldRetry } from './retry.js';
 
 export interface WebhookDispatchOptions {
   url: string;
@@ -231,3 +230,51 @@ export class WebhookDispatcher {
 }
 
 export const webhookDispatcher = new WebhookDispatcher();
+
+/**
+ * Backwards-compat convenience wrapper used by older callers (and tests)
+ * that pre-date the {@link WebhookDispatcher} class.
+ *
+ * Builds an HMAC-signed POST to `url` carrying `payload` serialised as JSON.
+ * The optional `ledger` field is consulted by callers that wish to suppress
+ * delivery for reorged ledgers — when `ledger` is provided and the indexer
+ * has rolled it back, delivery is skipped.
+ */
+export interface SimpleWebhookDispatch {
+  url: string;
+  secret: string;
+  event: string;
+  payload: unknown;
+  ledger?: number;
+}
+
+export async function dispatchWebhook(opts: SimpleWebhookDispatch): Promise<void> {
+  // Optional reorg suppression: callers that pass a ledger number opt in to
+  // skipping delivery for ledgers the indexer has rolled back.  The import is
+  // dynamic so this helper has no hard dependency on the indexer module graph.
+  if (opts.ledger !== undefined) {
+    try {
+      const { isLedgerRolledBack } = await import('../indexer/service.js');
+      if (isLedgerRolledBack(opts.ledger)) {
+        return;
+      }
+    } catch {
+      // If we can't determine reorg status, fall through and deliver.
+    }
+  }
+
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const payloadStr = JSON.stringify(opts.payload);
+  const signature = computeWebhookSignature(opts.secret, timestamp, payloadStr);
+
+  await fetch(opts.url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Fluxora-Event': opts.event,
+      'X-Fluxora-Signature': signature,
+      'X-Fluxora-Timestamp': timestamp,
+    },
+    body: payloadStr,
+  });
+}

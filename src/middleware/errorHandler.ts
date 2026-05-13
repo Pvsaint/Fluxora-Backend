@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { DecimalSerializationError, DecimalErrorCode } from '../serialization/decimal.js';
+import { DecimalSerializationError } from '../serialization/decimal.js';
 import { SerializationLogger, error as logError } from '../utils/logger.js';
 import { errorResponse } from '../utils/response.js';
 
@@ -39,11 +39,11 @@ export class ApiError extends Error {
  */
 export function errorHandler(
   err: Error,
-  req: any,
-  res: any,
-  _next: any
+  req: Request,
+  res: Response,
+  _next: NextFunction
 ): void {
-  const requestId = (req as Request & { id?: string }).id ?? (res.locals['requestId'] as string | undefined);
+  const requestId = req.id ?? (res.locals['requestId'] as string | undefined);
 
   if (err instanceof DecimalSerializationError) {
     SerializationLogger.validationFailed(err.field ?? 'unknown', err.rawValue, err.code, requestId);
@@ -78,6 +78,19 @@ export function errorHandler(
     return;
   }
 
+  // express.json() throws SyntaxError on malformed bodies — surface as 400.
+  if (err instanceof SyntaxError && (err as SyntaxError & { status?: number }).status === 400) {
+    res.status(400).json(
+      errorResponse(
+        ApiErrorCode.VALIDATION_ERROR,
+        'Request body is not valid JSON',
+        undefined,
+        requestId,
+      ),
+    );
+    return;
+  }
+
   logError('Unexpected error occurred', {
     errorName: err.name,
     errorMessage: err.message,
@@ -96,9 +109,11 @@ export function errorHandler(
 }
 
 /** Async handler wrapper */
-export function asyncHandler(fn: (req: any, res: any, next: any) => Promise<void>) {
-  return (req: any, res: any, next: any): void => {
-    Promise.resolve(fn(req, res, next)).catch((error) => next(error));
+export function asyncHandler(
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    Promise.resolve(fn(req, res, next)).catch((error: unknown) => next(error));
   };
 }
 

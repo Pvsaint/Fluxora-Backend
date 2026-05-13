@@ -33,7 +33,7 @@ export interface RateLimitsRouterOptions {
   defaults: { ip: RateLimitConfig; apiKey: RateLimitConfig; admin: RateLimitConfig };
 }
 
-export function createRateLimitsRouter(limiter: RateLimiter, opts?: RateLimitsRouterOptions) {
+export function createRateLimitsRouter(limiter: RateLimiter, opts?: RateLimitsRouterOptions): Router {
   const rateLimitsRouter = Router();
 
   /**

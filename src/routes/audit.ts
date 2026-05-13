@@ -19,7 +19,7 @@ import { successResponse } from '../utils/response.js';
 export const auditRouter = Router();
 
 auditRouter.get('/', (req, res) => {
-  const requestId = (req as any).id as string | undefined;
+  const requestId = req.id;
   const entries = getAuditEntries();
   res.json(successResponse({ entries, total: entries.length }, requestId));
 });

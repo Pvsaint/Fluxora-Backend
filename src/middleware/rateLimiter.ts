@@ -22,7 +22,18 @@ function buildErrorBody(
   route?: string,
   method?: string
 ) {
-  const body: any = {
+  const body: {
+    error: {
+      code: string;
+      message: string;
+      retryAfter: number;
+      limit: number;
+      window: string;
+      identifier: string;
+      route?: string;
+      method?: string;
+    };
+  } = {
     error: {
       code: 'RATE_LIMIT_EXCEEDED',
       message: `Too many requests. Retry after ${retryAfterSeconds} seconds.`,
@@ -104,7 +115,7 @@ export function createRateLimiter(
     return entry;
   }
 
-  function clientState(identifier: string, identifierType: 'ip' | 'apiKey', path?: string, method?: string): ClientState {
+  function clientState(identifier: string, identifierType: 'ip' | 'apiKey', path?: string, _method?: string): ClientState {
     const isAdmin = identifierType === 'apiKey' && adminKeys.has(identifier);
     const config = isAdmin ? adminConfig : identifierType === 'apiKey' ? apiKeyConfig : ipConfig;
     const counters = identifierType === 'apiKey' ? apiKeyCounters : ipCounters;
@@ -232,16 +243,17 @@ export function createRateLimiter(
       }
     }
     
-    return {
+    const status: RateLimitStatus = {
       identifier: identifierType === 'ip' ? identifier : maskApiKey(identifier),
       identifierType,
       limit: effectiveLimit,
       remaining: getRemainingRequests(entry.count, effectiveLimit),
       resetsAt: new Date(entry.resetAt).toISOString(),
       window: config.windowMs === 60_000 ? 'minute' : 'unknown',
-      route: path,
-      method,
     };
+    if (path !== undefined) status.route = path;
+    if (method !== undefined) status.method = method;
+    return status;
   }
 
   rateLimitHandler.getStatus = getStatus;

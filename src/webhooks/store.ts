@@ -5,7 +5,6 @@
 
 import type { WebhookDelivery, WebhookDeliveryStatus } from './types.js';
 import type { EnhancedRetryPolicy } from './retry.js';
-import { shouldSendToDLQ } from './retry.js';
 import { logger } from '../lib/logger.js';
 
 export interface DeadLetterQueueItem {
@@ -382,7 +381,13 @@ export class WebhookDeliveryStore {
   /**
    * Get store metrics
    */
-  getMetrics() {
+  getMetrics(): {
+    totalDeliveries: number;
+    successfulDeliveries: number;
+    failedDeliveries: number;
+    dlqItems: number;
+    outboxItems: number;
+  } {
     return { ...this.metrics };
   }
 

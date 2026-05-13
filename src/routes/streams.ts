@@ -72,7 +72,7 @@ import {
   parseBody,
   formatZodIssues,
 } from '../validation/schemas.js';
-import type { StreamStatus } from '../db/types.js';
+import type { StreamStatus, StreamFilter } from '../db/types.js';
 
 export const streamsRouter = Router();
 
@@ -320,16 +320,16 @@ export function _resetStreams(): void {
  */
 streamsRouter.get(
   '/',
-  asyncHandler(async (req: any, res: any) => {
+  asyncHandler(async (req: Request, res: Response) => {
     const requestId = req.id as string | undefined;
     const limit = parseLimit(req.query.limit);
     const cursor = parseCursor(req.query.cursor);
     const includeTotal = parseIncludeTotal(req.query.include_total);
 
-    // Indexed filters
-    const statusFilter    = req.query.status    as string | undefined;
-    const senderFilter    = req.query.sender    as string | undefined;
-    const recipientFilter = req.query.recipient as string | undefined;
+    // Indexed filters (parsed and forwarded into the repository query).
+    const statusFilter    = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const senderFilter    = typeof req.query.sender === 'string' ? req.query.sender : undefined;
+    const recipientFilter = typeof req.query.recipient === 'string' ? req.query.recipient : undefined;
 
     if (streamListingDependency.state !== 'healthy') {
       warn('Stream listing dependency unavailable', { dependency: 'stream-list-view', requestId });
@@ -338,8 +338,12 @@ streamsRouter.get(
 
     let result: { streams: Stream[]; hasMore: boolean; total?: number };
     try {
+      const filter: StreamFilter = {};
+      if (statusFilter !== undefined) filter.status = statusFilter as NonNullable<StreamFilter['status']>;
+      if (senderFilter !== undefined) filter.sender_address = senderFilter;
+      if (recipientFilter !== undefined) filter.recipient_address = recipientFilter;
       const dbResult = await streamRepository.findWithCursor(
-        {},
+        filter,
         limit,
         cursor?.lastId,
         includeTotal,
@@ -371,7 +375,7 @@ streamsRouter.get(
     if (includeTotal && result!.total !== undefined) response.total       = result!.total;
     if (nextCursor)                                  response.next_cursor = nextCursor;
 
-    res.json(response);
+    res.json(successResponse(response, requestId));
   }),
 );
 
@@ -381,9 +385,12 @@ streamsRouter.get(
  */
 streamsRouter.get(
   '/:id',
-  asyncHandler(async (req: any, res: any) => {
-    const { id }    = req.params;
-    const requestId = req.id as string | undefined;
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = req.params['id'];
+    const requestId = req.id;
+    if (!id) {
+      throw notFound('Stream', '');
+    }
     debug('Fetching stream', { id });
 
     let record;
@@ -411,8 +418,8 @@ streamsRouter.post(
   requireAuth,
   requireIdempotencyKey,
   asyncHandler(async (req: Request, res: Response) => {
-    const requestId = (req as any).id as string | undefined;
-    const correlationId = (req as any).correlationId as string | undefined;
+    const requestId = req.id;
+    const correlationId = req.correlationId;
     const idempotencyKey = parseIdempotencyKeyHeader(req.header('Idempotency-Key'));
 
     if (idempotencyDependency.state !== 'healthy') {
@@ -531,8 +538,11 @@ streamsRouter.delete(
   authenticate,
   requireAuth,
   asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    const requestId = (req as any).id as string | undefined;
+    const id = req.params['id'];
+    const requestId = req.id;
+    if (!id) {
+      throw notFound('Stream', '');
+    }
     debug('Cancelling stream', { id });
 
     let record;
@@ -559,9 +569,9 @@ streamsRouter.delete(
     }
 
     info('Stream cancelled', { id, requestId });
-    recordAuditEvent('STREAM_CANCELLED', 'stream', id, (req as any).correlationId ?? '');
+    recordAuditEvent('STREAM_CANCELLED', 'stream', id, req.correlationId ?? '');
 
-    res.json({ message: 'Stream cancelled', id });
+    res.json(successResponse({ message: 'Stream cancelled', id }, requestId));
   }),
 );
 
@@ -576,9 +586,13 @@ streamsRouter.delete(
 streamsRouter.patch(
   '/:id/status',
   asyncHandler(async (req: Request, res: Response) => {
-    const { id } = req.params;
-    const requestId = (req as any).id as string | undefined;
+    const id = req.params['id'];
+    const requestId = req.id;
     const { status: newStatus } = req.body ?? {};
+
+    if (!id) {
+      throw notFound('Stream', '');
+    }
 
     const validStatuses: ApiStreamStatus[] = ['scheduled', 'active', 'paused', 'completed', 'cancelled'];
     if (typeof newStatus !== 'string' || !validStatuses.includes(newStatus as ApiStreamStatus)) {
@@ -613,7 +627,7 @@ streamsRouter.patch(
     }
 
     info('Stream status updated', { id, from: record!.status, to: newStatus, requestId });
-    recordAuditEvent('STREAM_STATUS_UPDATED', 'stream', id, (req as any).correlationId ?? '');
+    recordAuditEvent('STREAM_STATUS_UPDATED', 'stream', id, req.correlationId ?? '');
 
     res.json(successResponse(toApiStream(updated!), requestId));
   }),

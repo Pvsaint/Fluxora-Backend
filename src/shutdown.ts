@@ -19,8 +19,6 @@
  */
 
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
 import { logger } from './lib/logger.js';
 
 let shuttingDown = false;
@@ -30,7 +28,7 @@ const hooks: Array<() => Promise<void> | void> = [];
  * Returns true if a graceful shutdown is currently in progress.
  */
 export function isShuttingDown(): boolean {
-  return shuttingDown || process.env['FLUXORA_SHUTDOWN'] === 'true' || (globalThis as any)['__FLUXORA_SHUTDOWN__'] === true;
+  return shuttingDown || process.env['FLUXORA_SHUTDOWN'] === 'true' || (globalThis as Record<string, unknown>)['__FLUXORA_SHUTDOWN__'] === true;
 }
 
 /**
@@ -48,7 +46,7 @@ export function addShutdownHook(fn: () => Promise<void> | void): void {
 export function _resetShutdownState(): void {
   shuttingDown = false;
   delete process.env['FLUXORA_SHUTDOWN'];
-  delete (globalThis as any)['__FLUXORA_SHUTDOWN__'];
+  delete (globalThis as Record<string, unknown>)['__FLUXORA_SHUTDOWN__'];
   hooks.length = 0;
 }
 

@@ -1,6 +1,4 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
-
+import { test, expect } from 'vitest';
 import {
   DEFAULT_MAX_WEBHOOK_BODY_BYTES,
   FLUXORA_WEBHOOK_HEADERS,
@@ -8,6 +6,25 @@ import {
   computeWebhookSignature,
   verifyWebhookSignature,
 } from './signature.js';
+
+// node:test → vitest assert-compat shim (see store.test.ts for rationale).
+const assert = {
+  equal: (actual: unknown, expected: unknown): void => {
+    expect(actual).toEqual(expected);
+  },
+  notEqual: (actual: unknown, expected: unknown): void => {
+    expect(actual).not.toEqual(expected);
+  },
+  deepEqual: (actual: unknown, expected: unknown): void => {
+    expect(actual).toEqual(expected);
+  },
+  ok: (value: unknown, msg?: string): void => {
+    expect(value, msg).toBeTruthy();
+  },
+  match: (value: string, pattern: RegExp): void => {
+    expect(value).toMatch(pattern);
+  },
+};
 
 // ── signing payload ───────────────────────────────────────────────────────────
 

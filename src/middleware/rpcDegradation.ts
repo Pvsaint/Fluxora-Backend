@@ -36,7 +36,9 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
  *
  * @param getService - factory / accessor returning the active service instance
  */
-export function createRpcDegradationMiddleware(getService: () => StellarRpcService) {
+export function createRpcDegradationMiddleware(
+  getService: () => StellarRpcService,
+): (req: Request, res: Response, next: NextFunction) => void {
   let lastLoggedState: string | undefined;
 
   return function rpcDegradationMiddleware(req: Request, res: Response, next: NextFunction): void {

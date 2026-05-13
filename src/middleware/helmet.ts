@@ -31,7 +31,7 @@ export function cspNonceMiddleware(req: Request, res: Response, next: NextFuncti
  * style-src. Any inline styles must use the per-request nonce instead.
  * See API_BEHAVIOR.md § Content Security Policy for rationale.
  */
-export function createHelmetMiddleware() {
+export function createHelmetMiddleware(): (req: Request, res: Response, next: NextFunction) => void {
   return (req: Request, res: Response, next: NextFunction): void => {
     const nonce = res.locals.cspNonce as string | undefined;
     const nonceDirective = nonce ? [`'nonce-${nonce}'`] : [];
@@ -57,7 +57,7 @@ export function createHelmetMiddleware() {
         preload: true,
       },
       frameguard: {
-        action: 'SAMEORIGIN',
+        action: 'sameorigin',
       },
       referrerPolicy: {
         policy: 'strict-origin-when-cross-origin',

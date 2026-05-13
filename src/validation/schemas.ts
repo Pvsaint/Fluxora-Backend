@@ -10,7 +10,6 @@
  * @module validation/schemas
  */
 import { z } from 'zod';
-import { normalizeDecimalString } from '../serialization/decimal.js';
 
 /** Regex for valid decimal strings: optional sign, digits, optional fraction */
 export const DECIMAL_STRING_REGEX = /^[+-]?\d+(\.\d+)?$/;

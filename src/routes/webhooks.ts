@@ -6,12 +6,71 @@
 import express from 'express';
 import type { Request, Response } from 'express';
 import { webhookService } from '../webhooks/service.js';
-import { webhookDeliveryStore, type DeadLetterQueueItem, type OutboxItem, type CircuitBreakerState } from '../webhooks/store.js';
+import { webhookDeliveryStore } from '../webhooks/store.js';
 import { verifyWebhookSignature } from '../webhooks/signature.js';
 import { logger } from '../lib/logger.js';
 import { successResponse, errorResponse } from '../utils/response.js';
 
 export const webhooksRouter = express.Router();
+
+/**
+ * POST /internal/webhooks/receive
+ *
+ * Verifies an incoming Fluxora webhook delivery against the shared secret.
+ * Returns a flat envelope (not the standard successResponse / errorResponse
+ * shape) so callers can rely on stable HTTP status codes and the
+ * `error` string match the documented `WebhookVerificationCode` values.
+ */
+const seenDeliveries = new Set<string>();
+webhooksRouter.post(
+  '/receive',
+  express.raw({ type: '*/*', limit: '1mb' }),
+  (req, res): void => {
+    const rawBody = req.body as Buffer;
+    const headers = req.headers as Record<string, string | undefined>;
+    // `verifyWebhookSignature` uses exact-optional types — only forward
+    // properties when they are actually set.
+    const verifyInput: Parameters<typeof verifyWebhookSignature>[0] = {
+      rawBody,
+      isDuplicateDelivery: (id: string) => seenDeliveries.has(id),
+    };
+    if (process.env.FLUXORA_WEBHOOK_SECRET !== undefined) {
+      verifyInput.secret = process.env.FLUXORA_WEBHOOK_SECRET;
+    }
+    if (process.env.FLUXORA_WEBHOOK_SECRET_PREVIOUS !== undefined) {
+      verifyInput.secretPrevious = process.env.FLUXORA_WEBHOOK_SECRET_PREVIOUS;
+    }
+    const deliveryHeader = headers['x-fluxora-delivery-id'];
+    if (deliveryHeader !== undefined) verifyInput.deliveryId = deliveryHeader;
+    const timestampHeader = headers['x-fluxora-timestamp'];
+    if (timestampHeader !== undefined) verifyInput.timestamp = timestampHeader;
+    const signatureHeader = headers['x-fluxora-signature'];
+    if (signatureHeader !== undefined) verifyInput.signature = signatureHeader;
+    const verification = verifyWebhookSignature(verifyInput);
+
+    if (!verification.ok) {
+      res.status(verification.status).json({ error: verification.code, message: verification.message });
+      return;
+    }
+
+    const deliveryId = headers['x-fluxora-delivery-id']!;
+    seenDeliveries.add(deliveryId);
+
+    let parsed: unknown;
+    try {
+      parsed = rawBody.length > 0 ? JSON.parse(rawBody.toString('utf8')) : null;
+    } catch {
+      parsed = null;
+    }
+
+    res.status(200).json({
+      ok: true,
+      deliveryId,
+      eventType: headers['x-fluxora-event'] ?? null,
+      event: parsed,
+    });
+  },
+);
 
 /**
  * POST /api/webhooks/queue
@@ -77,8 +136,15 @@ webhooksRouter.post('/queue', express.json(), async (req, res) => {
  * Get the status of a webhook delivery
  */
 webhooksRouter.get('/deliveries/:deliveryId', (req: Request, res: Response): void => {
-  const { deliveryId } = req.params;
-  const requestId = (req as any).id as string | undefined;
+  const deliveryId = req.params['deliveryId'];
+  const requestId = req.id;
+
+  if (!deliveryId) {
+    res.status(400).json(
+      errorResponse('INVALID_DELIVERY_ID', 'deliveryId path parameter is required', undefined, requestId)
+    );
+    return;
+  }
 
   const delivery = webhookService.getDeliveryStatus(deliveryId);
 
@@ -350,7 +416,7 @@ webhooksRouter.get('/metrics', (req, res) => {
  * Verify a webhook signature (for consumer testing)
  */
 webhooksRouter.post('/verify', express.raw({ type: 'application/json' }), (req, res) => {
-  const requestId = (req as any).id as string | undefined;
+  const requestId = req.id;
   const secret = req.query.secret as string;
   const deliveryId = req.header('x-fluxora-delivery-id');
   const timestamp = req.header('x-fluxora-timestamp');
@@ -447,7 +513,7 @@ webhooksRouter.post('/process-outbox', express.json(), async (req, res) => {
  * Process pending webhook retries (internal endpoint for background job)
  */
 webhooksRouter.post('/retry', express.json(), async (req, res) => {
-  const requestId = (req as any).id as string | undefined;
+  const requestId = req.id;
   const secret = req.query.secret as string;
 
   if (!secret) {

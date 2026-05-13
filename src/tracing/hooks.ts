@@ -82,8 +82,11 @@ export interface TracerHooks {
   /**
    * Called when a span is ended.
    * Typically used to finalize, export, or batch spans.
+   *
+   * Implementations may return a Promise — the tracer awaits it during
+   * `flush()` so async exporters can drain before shutdown.
    */
-  onSpanEnd?(span: Span): void;
+  onSpanEnd?(span: Span): void | Promise<void>;
 
   /**
    * Called when an event is recorded within a span.
@@ -114,7 +117,7 @@ export interface TracerConfig {
   /** OpenTelemetry integration (optional). */
   otel?: {
     enabled: boolean;
-    tracerProvider?: any; // OpenTelemetry TracerProvider
+    tracerProvider?: { getTracer(name: string): unknown }; // OpenTelemetry TracerProvider
     instrumentationName?: string;
   };
 
@@ -140,7 +143,10 @@ export class Tracer {
   private config: TracerConfig;
   private activeSpans: Map<string, Span> = new Map();
   private spanIdCounter: number = 0;
-  private otelTracer: any; // OpenTelemetry Tracer, if enabled
+  // OpenTelemetry Tracer, if enabled.  Typed as `unknown` so we can defer all
+  // shape-checking to the call-sites below — the OTel SDK is an optional
+  // dependency and may be absent at runtime.
+  private otelTracer: unknown;
 
   constructor(config: Partial<TracerConfig> = {}) {
     this.config = { ...DEFAULT_TRACER_CONFIG, ...config };
@@ -162,7 +168,7 @@ export class Tracer {
           this.config.otel.instrumentationName || 'fluxora-backend'
         );
       }
-    } catch (err) {
+    } catch {
       // OpenTelemetry initialization failed; continue with disabled OTel
       // but tracing hooks still work.
     }
@@ -206,7 +212,9 @@ export class Tracer {
     span.endTimeMs = Date.now();
     span.durationMs = span.endTimeMs - span.startTimeMs;
     span.status = status;
-    span.statusMessage = statusMessage;
+    if (statusMessage !== undefined) {
+      span.statusMessage = statusMessage;
+    }
 
     this.activeSpans.delete(span.context.spanId);
 
@@ -228,7 +236,7 @@ export class Tracer {
     const event: SpanEvent = {
       name,
       timestamp: Date.now(),
-      attributes,
+      ...(attributes !== undefined ? { attributes } : {}),
     };
 
     span.events.push(event);
@@ -276,13 +284,13 @@ export class Tracer {
     // Hooks may implement async flushing (e.g., batched export)
     if (this.config.hooks && typeof this.config.hooks.onSpanEnd === 'function') {
       for (const span of this.activeSpans.values()) {
-        await new Promise((resolve) => {
+        await new Promise<void>((resolve) => {
           this.safeCall(() => {
-            const result = this.config.hooks!.onSpanEnd?.(span);
-            if (result instanceof Promise) {
-              result.then(resolve).catch(() => resolve());
+            const result: void | Promise<void> = this.config.hooks!.onSpanEnd?.(span);
+            if (result && typeof (result as Promise<void>).then === 'function') {
+              (result as Promise<void>).then(() => resolve()).catch(() => resolve());
             } else {
-              resolve(undefined);
+              resolve();
             }
           });
         });
@@ -297,11 +305,14 @@ export class Tracer {
     if (!this.otelTracer) return;
     try {
       span.context.tags = span.context.tags || {};
-      (span.context.tags as any)._otelSpan = this.otelTracer.startSpan(
+      const tracer = this.otelTracer as {
+        startSpan: (name: string, opts?: { attributes?: Record<string, unknown> }) => unknown;
+      };
+      (span.context.tags as Record<string, unknown>)._otelSpan = tracer.startSpan(
         `${span.context.parentSpanId ? 'child' : 'root'}`,
         { attributes: { traceId: span.context.traceId, spanId: span.context.spanId } }
       );
-    } catch (err) {
+    } catch {
       // OTel error; continue without it
     }
   }
@@ -310,7 +321,13 @@ export class Tracer {
    * OpenTelemetry span end (if enabled).
    */
   private recordOtelSpanEnd(span: Span): void {
-    const otelSpan = (span.context.tags as any)?._otelSpan;
+    const otelSpan = (span.context.tags as Record<string, unknown> | undefined)?.['_otelSpan'] as
+      | {
+          end: () => void;
+          setStatus: (status: { code: number }) => void;
+          addEvent: (name: string, attrs?: Record<string, unknown>) => void;
+        }
+      | undefined;
     if (otelSpan && typeof otelSpan.end === 'function') {
       try {
         otelSpan.setStatus({ code: span.status === 'ok' ? 0 : 1 });
@@ -318,7 +335,7 @@ export class Tracer {
           otelSpan.addEvent(span.status, { description: span.statusMessage });
         }
         otelSpan.end();
-      } catch (err) {
+      } catch {
         // OTel error; continue without it
       }
     }
@@ -328,11 +345,13 @@ export class Tracer {
    * OpenTelemetry event record (if enabled).
    */
   private recordOtelEvent(span: Span, event: SpanEvent): void {
-    const otelSpan = (span.context.tags as any)?._otelSpan;
+    const otelSpan = (span.context.tags as Record<string, unknown> | undefined)?.['_otelSpan'] as
+      | { addEvent: (name: string, attrs?: Record<string, unknown>) => void }
+      | undefined;
     if (otelSpan && typeof otelSpan.addEvent === 'function') {
       try {
         otelSpan.addEvent(event.name, event.attributes);
-      } catch (err) {
+      } catch {
         // OTel error; continue without it
       }
     }
@@ -389,12 +408,15 @@ export async function traceSpan<T>(
   parentSpanId?: string,
 ): Promise<T> {
   const tracer = getTracer();
-  const span = tracer.startSpan({
+  const startContext: Omit<SpanContext, 'spanId'> = {
     traceId: correlationId,
-    parentSpanId,
     serviceName: 'fluxora-api',
     tags: { 'span.name': name, ...tags },
-  });
+  };
+  if (parentSpanId !== undefined) {
+    startContext.parentSpanId = parentSpanId;
+  }
+  const span = tracer.startSpan(startContext);
 
   try {
     const result = await fn(span);

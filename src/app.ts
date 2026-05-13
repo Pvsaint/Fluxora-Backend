@@ -7,13 +7,18 @@ import { auditRouter } from './routes/audit.js';
 import { adminRouter } from './routes/admin.js';
 import { dlqRouter } from './routes/dlq.js';
 import { authRouter } from './routes/auth.js';
+import { webhooksRouter } from './routes/webhooks.js';
+import { privacyRouter } from './routes/privacy.js';
+import { privacyHeaders } from './middleware/pii.js';
+import type { Config } from './config/env.js';
+import type { HealthCheckManager } from './config/health.js';
 import { cspNonceMiddleware, createHelmetMiddleware } from './middleware/helmet.js';
 import { metricsRouter } from './routes/metrics.js';
 import { correlationIdMiddleware } from './middleware/correlationId.js';
 import { corsAllowlistMiddleware } from './middleware/cors.js';
 import { requestLoggerMiddleware } from './middleware/requestLogger.js';
 import { errorHandler } from './middleware/errorHandler.js';
-import { bodySizeLimitMiddleware, requestTimeoutMiddleware, BODY_LIMIT_BYTES } from './middleware/requestProtection.js';
+import { bodySizeLimitMiddleware, BODY_LIMIT_BYTES } from './middleware/requestProtection.js';
 import { httpMetrics } from './middleware/httpMetrics.js';
 import { isShuttingDown } from './shutdown.js';
 import { createRateLimiter } from './middleware/rateLimiter.js';
@@ -28,6 +33,10 @@ export interface AppOptions {
   env?: Record<string, string | undefined>;
   /** Socket-level request timeout in ms (defaults to 30000). */
   requestTimeoutMs?: number;
+  /** Optional Config instance to expose to route handlers via `app.locals.config`. */
+  config?: Config;
+  /** Optional health-check manager exposed via `app.locals.healthManager`. */
+  healthManager?: HealthCheckManager;
 }
 
 export function createApp(options: AppOptions = {}): Express {
@@ -43,6 +52,7 @@ export function createApp(options: AppOptions = {}): Express {
     app.locals.healthManager = options.healthManager;
   }
 
+  app.use(privacyHeaders);
   app.use(cspNonceMiddleware);
   app.use(createHelmetMiddleware());
   app.use(bodySizeLimitMiddleware);
@@ -77,6 +87,7 @@ export function createApp(options: AppOptions = {}): Express {
   app.use('/internal/indexer', indexerRouter);
   app.use('/internal/webhooks', webhooksRouter);
   app.use('/api/audit', auditRouter);
+  app.use('/api/privacy', privacyRouter);
   app.use('/admin/dlq', dlqRouter);
   app.use('/api/rate-limits', createRateLimitsRouter(rateLimiter, { defaults: getRateLimitConfig(env) }));
 
@@ -91,7 +102,7 @@ export function createApp(options: AppOptions = {}): Express {
   });
 
   app.use((req: Request, res: Response) => {
-    const requestId = (req as any).id as string | undefined;
+    const requestId = req.id;
     res.status(404).json(
       errorResponse('NOT_FOUND', 'The requested resource was not found', undefined, requestId),
     );

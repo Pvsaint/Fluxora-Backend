@@ -20,9 +20,9 @@
  */
 
 import { AsyncLocalStorage } from 'async_hooks';
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import { getTracer } from './hooks.js';
-import { Span } from './hooks.js';
+import { Span, type SpanContext } from './hooks.js';
 
 /**
  * AsyncLocalStorage for propagating correlationId through async boundaries.
@@ -58,12 +58,14 @@ export interface RequestTraceContext {
  * Usage:
  *   app.use(tracingMiddleware(config));
  */
-export function tracingMiddleware(config?: { enabled?: boolean; sampleRate?: number }) {
+export function tracingMiddleware(
+  config?: { enabled?: boolean; sampleRate?: number },
+): (req: Request, res: Response, next: NextFunction) => void {
   const tracer = getTracer();
   const enabled = config?.enabled ?? false;
 
-  return (req: any, res: Response, next: NextFunction): void => {
-    const correlationId = req.correlationId || 'unknown';
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const correlationId = req.correlationId ?? 'unknown';
 
     if (!enabled) {
       // Still propagate correlationId even when tracing is disabled.
@@ -78,11 +80,10 @@ export function tracingMiddleware(config?: { enabled?: boolean; sampleRate?: num
         const sampleRate = config?.sampleRate ?? 1.0;
         const shouldSample = Math.random() < sampleRate;
 
-        // Create a span for this request
-        const span = tracer.startSpan({
+        // Create a span for this request.  Optional fields are only assigned
+        // when defined to satisfy `exactOptionalPropertyTypes: true`.
+        const startContext: Omit<SpanContext, 'spanId'> = {
           traceId: correlationId,
-          parentSpanId: undefined,
-          userId: extractUserId(req),
           serviceName: 'fluxora-api',
           tags: {
             'http.method': req.method,
@@ -91,7 +92,12 @@ export function tracingMiddleware(config?: { enabled?: boolean; sampleRate?: num
             'http.user_agent': req.headers['user-agent'],
             'otel.enabled': shouldSample,
           },
-        });
+        };
+        const userId = extractUserId(req);
+        if (userId !== undefined) {
+          startContext.userId = userId;
+        }
+        const span = tracer.startSpan(startContext);
 
         // Attach span to request locals for access by routes
         if (!res.locals) {
@@ -125,7 +131,7 @@ export function tracingMiddleware(config?: { enabled?: boolean; sampleRate?: num
         });
 
         next();
-      } catch (err) {
+      } catch {
         // Tracing initialization error; continue without tracing
         next();
       }
@@ -136,15 +142,15 @@ export function tracingMiddleware(config?: { enabled?: boolean; sampleRate?: num
 /**
  * Get the trace context from a response object (for route handlers).
  */
-export function getTraceContext(res: any): RequestTraceContext | undefined {
-  return res.locals?.traceContext;
+export function getTraceContext(res: Response): RequestTraceContext | undefined {
+  return (res.locals as { traceContext?: RequestTraceContext } | undefined)?.traceContext;
 }
 
 /**
  * Record an event in the current request's trace span.
  */
 export function recordTraceEvent(
-  res: any,
+  res: Response,
   eventName: string,
   attributes?: Record<string, unknown>
 ): void {
@@ -160,7 +166,7 @@ export function recordTraceEvent(
   context.eventLog.push({
     name: eventName,
     timestamp: Date.now(),
-    attributes,
+    ...(attributes !== undefined ? { attributes } : {}),
   });
 }
 
@@ -168,12 +174,12 @@ export function recordTraceEvent(
  * Record an error in the current request's trace span.
  */
 export function recordTraceError(
-  req: any,
-  res: any,
+  req: Request,
+  res: Response,
   error: Error,
   context?: Record<string, unknown>
 ): void {
-  const correlationId = req.correlationId || 'unknown';
+  const correlationId = req.correlationId ?? 'unknown';
   const tracer = getTracer();
 
   tracer.recordError(correlationId, error, {
@@ -203,15 +209,18 @@ export function recordTraceError(
  * Returns undefined if no user identity found (public endpoints).
  * Sanitized to prevent PII leakage.
  */
-function extractUserId(req: any): string | undefined {
-  // Check for JWT claims
-  if (req.user?.sub) {
-    return `user:${sanitizeId(req.user.sub)}`;
+function extractUserId(req: Request): string | undefined {
+  // Check for JWT claims.  Some deployments populate `sub` on `req.user`; we
+  // narrow it here without coupling to a wider auth type.
+  const user = req.user as (Express.Request['user'] & { sub?: string }) | undefined;
+  if (user?.sub) {
+    return `user:${sanitizeId(user.sub)}`;
   }
 
   // Check for API key (service account)
-  if (req.apiKeyId) {
-    return `apikey:${sanitizeId(req.apiKeyId)}`;
+  const apiKeyId = (req as Request & { apiKeyId?: string }).apiKeyId;
+  if (apiKeyId) {
+    return `apikey:${sanitizeId(apiKeyId)}`;
   }
 
   // No authenticated identity

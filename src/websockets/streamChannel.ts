@@ -67,20 +67,28 @@ export function broadcast(message: BroadcastMessage): void {
 
   // Convert BroadcastMessage to StreamUpdateEvent
   const eventId = `event-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-  
+
+  // DegradedBroadcastEvent has no streamId or payload — it is system-wide.
+  // Surface a synthetic streamId so consumers can still dispatch it.
+  const streamId = message.event === 'service.degraded' ? '_system_' : message.streamId;
+  const basePayload =
+    message.event === 'service.degraded'
+      ? { reason: message.reason }
+      : message.payload;
+
   hub.broadcast({
-    streamId: message.streamId,
+    streamId,
     eventId,
     payload: {
-      ...message.payload,
+      ...basePayload,
       event: message.event,
-      timestamp: message.timestamp
-    }
-  }).catch(err => {
-    warn('Failed to broadcast event', { 
-      streamId: message.streamId, 
-      eventId, 
-      error: err.message 
+      timestamp: message.timestamp,
+    },
+  }).catch((err: Error) => {
+    warn('Failed to broadcast event', {
+      streamId,
+      eventId,
+      error: err.message,
     });
   });
 }
