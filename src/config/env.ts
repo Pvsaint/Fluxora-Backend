@@ -2,75 +2,79 @@ import { type StellarNetwork, STELLAR_NETWORKS, type ContractAddresses } from '.
 export { STELLAR_NETWORKS, type StellarNetwork, type ContractAddresses } from './stellar.js';
 
 /**
- * Global configuration interface for the Fluxora API.
- */
+* Global configuration interface for the Fluxora API.
+*/
 export interface Config {
-    // Basic service info
-    port: number;
-    nodeEnv: 'development' | 'staging' | 'production' | 'test';
-    apiVersion: string;
+// Basic service info
+port: number;
+nodeEnv: 'development' | 'staging' | 'production' | 'test';
+apiVersion: string;
 
-    // Infrastructure
-    databaseUrl: string;
-    databasePoolMin: number;
-    databasePoolMax: number;
-    databaseConnectionTimeout: number;
-    databaseIdleTimeout: number;
+// Infrastructure
+databaseUrl: string;
+databasePoolMin: number;
+databasePoolMax: number;
+databaseConnectionTimeout: number;
+databaseIdleTimeout: number;
 
-    redisUrl: string;
-    redisEnabled: boolean;
+redisUrl: string;
+redisEnabled: boolean;
 
-    // Stellar Network
-    stellarNetwork: StellarNetwork;
-    horizonUrl: string;
-    horizonNetworkPassphrase: string;
-    contractAddresses: ContractAddresses;
+// Stellar Network
+stellarNetwork: StellarNetwork;
+horizonUrl: string;
+horizonNetworkPassphrase: string;
+contractAddresses: ContractAddresses;
 
-    // Security & Auth
-    jwtSecret: string;
-    jwtExpiresIn: string;
-    apiKeys: string[];
+// Security & Auth
+jwtSecret: string;
+jwtExpiresIn: string;
+apiKeys: string[];
 
-    // Request handling
-    maxRequestSizeBytes: number;
-    maxJsonDepth: number;
-    requestTimeoutMs: number;
+// Request handling
+maxRequestSizeBytes: number;
+maxJsonDepth: number;
+requestTimeoutMs: number;
 
-    // Observability
-    logLevel: 'debug' | 'info' | 'warn' | 'error';
-    metricsEnabled: boolean;
+// Observability
+logLevel: 'debug' | 'info' | 'warn' | 'error';
+metricsEnabled: boolean;
 
-    // Distributed Tracing (OpenTelemetry optional)
-    tracingEnabled: boolean;
-    tracingSampleRate: number; // 0.0 to 1.0
-    tracingOtelEnabled: boolean; // OpenTelemetry integration
-    tracingLogEvents: boolean; // Log span events
+// Distributed Tracing (OpenTelemetry optional)
+tracingEnabled: boolean;
+tracingSampleRate: number; // 0.0 to 1.0
+tracingOtelEnabled: boolean; // OpenTelemetry integration
+tracingLogEvents: boolean; // Log span events
 
-    // Webhooks
-    webhookUrl?: string | undefined;
-    webhookSecret?: string | undefined;
-    /** Previous secret kept valid during rotation window */
-    webhookSecretPrevious?: string | undefined;
+// Webhooks
+webhookUrl?: string | undefined;
+webhookSecret?: string | undefined;
+/** Previous secret kept valid during rotation window */
+webhookSecretPrevious?: string | undefined;
 
-    // Feature flags
-    enableStreamValidation: boolean;
-    enableRateLimit: boolean;
-    requirePartnerAuth: boolean;
-    partnerApiToken?: string | undefined;
-    requireAdminAuth: boolean;
-    adminApiToken?: string | undefined;
-    indexerEnabled: boolean;
-    workerEnabled: boolean;
-    indexerStallThresholdMs: number;
-    indexerLastSuccessfulSyncAt?: string | undefined;
-    deploymentChecklistVersion: string;
+// Feature flags
+enableStreamValidation: boolean;
+enableRateLimit: boolean;
+requirePartnerAuth: boolean;
+partnerApiToken?: string | undefined;
+requireAdminAuth: boolean;
+adminApiToken?: string | undefined;
+indexerEnabled: boolean;
+workerEnabled: boolean;
+indexerStallThresholdMs: number;
+indexerLastSuccessfulSyncAt?: string | undefined;
+deploymentChecklistVersion: string;
+
+// Health Checks
+healthCheckTimeoutMs: number;
+healthCheckIntervalMs: number;
 }
 
 /**
- * Validation error for configuration issues
- */
+* Validation error for configuration issues
+*/
 export class ConfigError extends Error {
-    constructor(message: string) {
+constructor(message: string) {
         super(`Configuration Error: ${message}`);
         this.name = 'ConfigError';
     }
@@ -281,6 +285,10 @@ export function loadConfig(): Config {
         indexerStallThresholdMs: parseIntEnv(process.env.INDEXER_STALL_THRESHOLD_MS, 5 * 60 * 1000, 1000),
         indexerLastSuccessfulSyncAt: process.env.INDEXER_LAST_SUCCESSFUL_SYNC_AT,
         deploymentChecklistVersion: process.env.DEPLOYMENT_CHECKLIST_VERSION ?? '2026-03-27',
+
+        // Parsed safely with a min value of 1 enforced
+        healthCheckTimeoutMs: parseIntEnv(process.env.HEALTH_CHECK_TIMEOUT_MS, 5000, 1),
+        healthCheckIntervalMs: parseIntEnv(process.env.HEALTH_CHECK_INTERVAL_MS, 30000, 1),
     };
 
     return config;
