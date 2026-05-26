@@ -15,8 +15,9 @@ import type {
 } from './types.js';
 import { DEFAULT_RETRY_POLICY } from './types.js';
 import { webhookDeliveryStore } from './store.js';
-import { calculateNextRetryTime, shouldRetry } from './retry.js';
 import { computeWebhookSignature } from './signature.js';
+import { calculateNextRetryTime, shouldRetry } from './retry.js';
+import { webhookDeliveriesTotal, webhookDeliveryDurationSeconds } from '../metrics/businessMetrics.js';
 
 export class WebhookService {
   private policy: WebhookRetryPolicy;
@@ -89,6 +90,7 @@ export class WebhookService {
       timestamp: Date.now(),
     };
 
+    const startTime = Date.now();
     try {
       const response = await this.sendWebhook(
         delivery.endpointUrl,
@@ -111,6 +113,7 @@ export class WebhookService {
           statusCode: response.status,
           attempt: attemptNumber,
         });
+        webhookDeliveriesTotal.inc({ outcome: 'success' });
       } else {
         // Handle non-2xx responses
         if (shouldRetry(attempt, attemptNumber, this.policy)) {
@@ -135,6 +138,7 @@ export class WebhookService {
 
         delivery.attempts.push(attempt);
         webhookDeliveryStore.store(delivery);
+        webhookDeliveriesTotal.inc({ outcome: 'failed' });
       }
     } catch (error) {
       // Network error or timeout
@@ -165,6 +169,10 @@ export class WebhookService {
 
       delivery.attempts.push(attempt);
       webhookDeliveryStore.store(delivery);
+      webhookDeliveriesTotal.inc({ outcome: 'failed' });
+    } finally {
+      const durationSeconds = (Date.now() - startTime) / 1000;
+      webhookDeliveryDurationSeconds.observe(durationSeconds);
     }
   }
 
