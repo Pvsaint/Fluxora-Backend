@@ -42,6 +42,7 @@
  * - Duplicate cancel         → 409 CONFLICT
  * - DB unavailable           → 503 SERVICE_UNAVAILABLE
  * - Idempotency store down   → 503 SERVICE_UNAVAILABLE
+ * - Address not on-chain     → 422 UNPROCESSABLE_ENTITY
  *
  * @module routes/streams
  */
@@ -72,8 +73,15 @@ import {
   parseBody,
   formatZodIssues,
 } from '../validation/schemas.js';
+import { PaginationSchema } from '../validation/paginationSchema.js';
 import type { StreamStatus, StreamFilter } from '../db/types.js';
 import { streamsCreatedTotal } from '../metrics/businessMetrics.js';
+import {
+  RedisIdempotencyStore,
+  NoOpIdempotencyStore,
+  InMemoryIdempotencyStore,
+  type IdempotencyStore,
+} from '../redis/idempotencyStore.js';
 
 export const streamsRouter = Router();
 
@@ -103,12 +111,6 @@ type NormalizedCreateInput = {
   endTime: number;
 };
 
-type StoredIdempotentResponse = {
-  requestFingerprint: string;
-  statusCode: number;
-  body: ReturnType<typeof successResponse<Stream>>;
-};
-
 const AMOUNT_FIELDS = ['depositAmount', 'ratePerSecond'] as const;
 
 // ── Dependency state (injectable for tests) ───────────────────────────────────
@@ -116,8 +118,13 @@ const AMOUNT_FIELDS = ['depositAmount', 'ratePerSecond'] as const;
 const streamListingDependency = { state: 'healthy' as DependencyState };
 const idempotencyDependency   = { state: 'healthy' as DependencyState };
 
-// In-memory idempotency store (Redis-backed in production; sufficient for now)
-const idempotencyStore = new Map<string, StoredIdempotentResponse>();
+// Idempotency store — starts as InMemoryIdempotencyStore; replaced at startup
+// with a RedisIdempotencyStore when Redis is available.
+let idempotencyStore: IdempotencyStore<ReturnType<typeof successResponse<Stream>>> =
+  new InMemoryIdempotencyStore();
+
+// TTL for idempotency entries — overridden in tests and set from config at startup
+let idempotencyTtlSeconds = 86400;
 
 /**
  * Legacy shim — audit.test.ts and streams.test.ts reference this array.
@@ -133,8 +140,27 @@ export function setStreamListingDependencyState(state: DependencyState): void {
 export function setIdempotencyDependencyState(state: DependencyState): void {
   idempotencyDependency.state = state;
 }
+
+/**
+ * Reset the idempotency store to a fresh in-memory instance.
+ * Used in tests to get a clean slate with full idempotency semantics
+ * (no Redis required).
+ */
 export function resetStreamIdempotencyStore(): void {
-  idempotencyStore.clear();
+  idempotencyStore = new InMemoryIdempotencyStore();
+}
+
+/**
+ * Replace the idempotency store implementation.
+ * Called at startup with a RedisIdempotencyStore, and in tests with a
+ * FakeRedisClient-backed store or a NoOpIdempotencyStore.
+ */
+export function setIdempotencyStore(
+  store: IdempotencyStore<ReturnType<typeof successResponse<Stream>>>,
+  ttlSeconds?: number,
+): void {
+  idempotencyStore = store;
+  if (ttlSeconds !== undefined) idempotencyTtlSeconds = ttlSeconds;
 }
 
 // ── DB → API mapper ───────────────────────────────────────────────────────────
@@ -336,19 +362,26 @@ export function enforceStreamScope(req: Request, res: Response, next: NextFuncti
 /**
  * GET /api/streams
  * List streams with cursor-based pagination.
+ *
+ * Query params are validated via PaginationSchema (Zod). Invalid params
+ * return 400 VALIDATION_ERROR before any DB call is made.
  */
 streamsRouter.get(
   '/',
   asyncHandler(async (req: Request, res: Response) => {
     const requestId = req.id as string | undefined;
-    const limit = parseLimit(req.query.limit);
-    const cursor = parseCursor(req.query.cursor);
-    const includeTotal = parseIncludeTotal(req.query.include_total);
 
-    // Indexed filters (parsed and forwarded into the repository query).
-    const statusFilter    = typeof req.query.status === 'string' ? req.query.status : undefined;
-    const senderFilter    = typeof req.query.sender === 'string' ? req.query.sender : undefined;
-    const recipientFilter = typeof req.query.recipient === 'string' ? req.query.recipient : undefined;
+    // Validate all query params in one pass via Zod
+    const parsed = PaginationSchema.safeParse(req.query);
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      throw validationError(first?.message ?? 'Invalid query parameters');
+    }
+    const { limit, cursor: rawCursor, status: statusFilter, sender: senderFilter,
+            recipient: recipientFilter, include_total } = parsed.data;
+
+    const cursor       = rawCursor !== undefined ? parseCursor(rawCursor) : undefined;
+    const includeTotal = include_total === 'true';
 
     if (streamListingDependency.state !== 'healthy') {
       warn('Stream listing dependency unavailable', { dependency: 'stream-list-view', requestId });
@@ -380,19 +413,18 @@ streamsRouter.get(
     const hasMore     = result!.hasMore;
     const nextCursor  = hasMore && pageStreams.length > 0
       ? encodeCursor(pageStreams[pageStreams.length - 1]!.id)
-      : undefined;
+      : null;
 
     info('Listing streams', { limit, returned: pageStreams.length, hasMore, requestId });
 
     const response: {
       streams: Stream[];
       has_more: boolean;
+      next_cursor: string | null;
       total?: number;
-      next_cursor?: string;
-    } = { streams: pageStreams, has_more: hasMore };
+    } = { streams: pageStreams, has_more: hasMore, next_cursor: nextCursor };
 
-    if (includeTotal && result!.total !== undefined) response.total       = result!.total;
-    if (nextCursor)                                  response.next_cursor = nextCursor;
+    if (includeTotal && result!.total !== undefined) response.total = result!.total;
 
     res.json(successResponse(response, requestId));
   }),
@@ -470,7 +502,7 @@ streamsRouter.post(
     }
 
     const requestFingerprint = fingerprintInput(normalizedInput);
-    const existingResponse   = idempotencyStore.get(idempotencyKey);
+    const existingResponse   = await idempotencyStore.get(idempotencyKey);
 
     if (existingResponse) {
       if (existingResponse.requestFingerprint !== requestFingerprint) {
@@ -531,7 +563,11 @@ streamsRouter.post(
 
     const stream = toApiStream(upsertResult!.stream);
     const responseEnvelope = successResponse(stream, requestId);
-    idempotencyStore.set(idempotencyKey, { requestFingerprint, statusCode: 201, body: responseEnvelope });
+    await idempotencyStore.set(
+      idempotencyKey,
+      { requestFingerprint, statusCode: 201, body: responseEnvelope },
+      idempotencyTtlSeconds,
+    );
 
     SerializationLogger.amountSerialized(2, requestId);
     info('Stream created', { id: stream.id, requestId, correlationId, action: 'created' });
